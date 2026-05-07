@@ -717,6 +717,84 @@ const STATE = {
   subjectProgress: {},
 };
 
+// =============================================
+// SESSION PERSISTENCE (localStorage)
+// =============================================
+const SESSION_KEY = 'lp_session';
+const INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 minutos en ms
+let inactivityTimer = null;
+
+function saveSession() {
+  if (!STATE.currentUser && !STATE.isAdmin) return;
+  const session = {
+    isAdmin: STATE.isAdmin,
+    userId: STATE.currentUser?.id || null,
+    xp: STATE.xp,
+    streak: STATE.streak,
+    totalQuestions: STATE.totalQuestions,
+    correctAnswers: STATE.correctAnswers,
+    subjectProgress: STATE.subjectProgress,
+    simResults: STATE.simResults,
+    examDate: STATE.examDate.toISOString(),
+    quizHistory: STATE.quizHistory,
+    ts: Date.now()
+  };
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+}
+
+function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    // Expire sessions older than 30 min of inactivity
+    if (Date.now() - s.ts > INACTIVITY_TIMEOUT) {
+      clearSession();
+      return null;
+    }
+    return s;
+  } catch(e) { return null; }
+}
+
+let inactivityWarnTimer = null;
+
+function resetInactivityTimer() {
+  if (inactivityTimer) clearTimeout(inactivityTimer);
+  if (inactivityWarnTimer) clearTimeout(inactivityWarnTimer);
+  // Remove any existing warning toast
+  const existingWarn = document.getElementById('inactivity-warn');
+  if (existingWarn) existingWarn.remove();
+  // Only run timer when logged in
+  if (!STATE.currentUser && !STATE.isAdmin) return;
+  saveSession(); // Update timestamp on activity
+  // Warn at 5 minutes remaining
+  inactivityWarnTimer = setTimeout(() => {
+    if (!STATE.currentUser && !STATE.isAdmin) return;
+    const warn = document.createElement('div');
+    warn.id = 'inactivity-warn';
+    warn.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg-elevated);border:1px solid var(--gold-border);border-radius:12px;padding:14px 22px;font-size:13px;color:var(--gold);z-index:9999;display:flex;align-items:center;gap:12px;box-shadow:0 8px 32px rgba(0,0,0,0.4)';
+    warn.innerHTML = '⏱️ <span>Tu sesión expirará en <strong>5 minutos</strong> por inactividad.</span> <button onclick="resetInactivityTimer()" style="background:var(--gold);border:none;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;color:#1a1000;cursor:pointer">Continuar</button>';
+    document.body.appendChild(warn);
+  }, INACTIVITY_TIMEOUT - 5 * 60 * 1000);
+  // Logout after full timeout
+  inactivityTimer = setTimeout(() => {
+    clearSession();
+    const existingWarn2 = document.getElementById('inactivity-warn');
+    if (existingWarn2) existingWarn2.remove();
+    alert('⏱️ Tu sesión expiró por inactividad (30 minutos). Por favor inicia sesión de nuevo.');
+    doLogout();
+  }, INACTIVITY_TIMEOUT);
+}
+
+// Track user activity
+['mousemove','keydown','click','touchstart','scroll'].forEach(evt => {
+  document.addEventListener(evt, resetInactivityTimer, { passive: true });
+});
+
 // DB en memoria (se sincroniza con JSONBin)
 let DB = {
   users: [
@@ -975,9 +1053,13 @@ async function doAdminLogin() {
 
 function doLogout() {
   saveUserProgress();
+  clearSession();
+  if (inactivityTimer) clearTimeout(inactivityTimer);
   STATE.currentUser = null;
   STATE.isAdmin = false;
   STATE.chatHistory = [];
+  STATE.xp = 0; STATE.streak = 0; STATE.totalQuestions = 0; STATE.correctAnswers = 0;
+  STATE.simResults = []; STATE.subjectProgress = {}; STATE.quizHistory = [];
   document.getElementById('auth-section').classList.remove('hidden');
   document.getElementById('app-section').classList.add('hidden');
   document.getElementById('admin-section').classList.add('hidden');
@@ -1002,13 +1084,17 @@ function enterApp() {
       STATE.subjectProgress[s.id] = Math.floor(Math.random()*40)+30; // demo data
     }
   });
-  
+
+  saveSession();
+  resetInactivityTimer();
   navigate('dashboard');
 }
 
 function enterAdminPanel() {
   document.getElementById('auth-section').classList.add('hidden');
   document.getElementById('admin-section').classList.remove('hidden');
+  saveSession();
+  resetInactivityTimer();
   adminNav('users');
 }
 
@@ -1318,7 +1404,7 @@ La opción ${['A','B','C','D'][randomCorrect]} DEBE ser la correcta. Su feedback
 
     const geminiKey = STATE.geminiKey || DB.config.geminiKey;
     if (!geminiKey) throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel.');
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,{
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.8,maxOutputTokens:1500}})
@@ -1332,16 +1418,34 @@ La opción ${['A','B','C','D'][randomCorrect]} DEBE ser la correcta. Su feedback
     STATE.quizState = { question:aiQ, answered:false, selected:null };
     renderSingleQuestion(el, subjectId, subjectName);
   } catch(err) {
-    el.innerHTML = `
+    // On quota/rate-limit errors, fall back to local bank
+    const is429 = err.message?.includes('429') || err.message?.includes('quota') || err.message?.includes('Quota');
+    if (is429) {
+      // Use a local sample question for this subject
+      const fallback = SAMPLE_QUESTIONS.find(q=>q.subject===subjectId) || SAMPLE_QUESTIONS[Math.floor(Math.random()*SAMPLE_QUESTIONS.length)];
+      STATE.quizState = { question:{...fallback, subjectName}, answered:false, selected:null };
+      renderSingleQuestion(el, subjectId, subjectName);
+      // Show a soft notice
+      setTimeout(()=>{
+        const notice = document.createElement('div');
+        notice.style.cssText = 'position:fixed;bottom:20px;right:20px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);border-radius:10px;padding:12px 18px;font-size:12px;color:var(--amber);max-width:320px;z-index:999;line-height:1.6';
+        notice.innerHTML = '⚠️ <strong>Cuota de IA temporalmente agotada.</strong> Mostrando pregunta del banco local. Intenta de nuevo en unos minutos.';
+        document.body.appendChild(notice);
+        setTimeout(()=>notice.remove(), 6000);
+      }, 300);
+      return;
+    }
+    el.innerHTML = \`
     <div class="page-header"><div class="page-title">Preguntas con IA ✨</div></div>
     <div class="page-body" style="max-width:780px;margin:0 auto">
       <div class="card" style="text-align:center;padding:40px">
         <div style="font-size:40px;margin-bottom:16px">⚠️</div>
         <div class="font-serif text-lg font-700 mb-2">Error al generar pregunta</div>
-        <div class="text-secondary text-sm mb-4">${err.message}</div>
+        <div class="text-secondary text-sm mb-4">\${err.message}</div>
+        \${err.message?.includes('no configurada') ? '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;font-size:13px;color:var(--amber);margin-bottom:16px">El administrador debe ingresar la API key de Google AI Studio en el panel de administración.</div>' : ''}
         <button onclick="renderQuiz(document.getElementById('page-quiz'))" class="btn-primary" style="width:auto;padding:10px 24px">← Volver</button>
       </div>
-    </div>`;
+    </div>\`;
   }
 }
 
@@ -1518,7 +1622,7 @@ JSON válido únicamente, sin texto extra:
 
       const geminiKey = STATE.geminiKey || DB.config.geminiKey;
       if (!geminiKey) throw new Error('No hay API key configurada');
-      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,{
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.8,maxOutputTokens:1500}})
@@ -1530,9 +1634,9 @@ JSON válido únicamente, sin texto extra:
       const q = JSON.parse(txt);
       questions.push({id:Date.now()+i,subject:s.id,subjectName:s.name,type:'situacional',caseText:q.caseText,text:q.text,options:q.options,correct:q.correct,feedback:q.feedback});
     } catch(err) {
-      // Fallback to sample
+      // Fallback to sample question (works for 429 quota errors too)
       const fallback = SAMPLE_QUESTIONS.find(q=>q.subject===s.id)||SAMPLE_QUESTIONS[i%SAMPLE_QUESTIONS.length];
-      questions.push({...fallback,id:Date.now()+i});
+      questions.push({...fallback,id:Date.now()+i,subjectName:s.name});
     }
   }
 
@@ -1797,7 +1901,7 @@ Citas artículos específicos y jurisprudencia de Corte Constitucional (T-, C-, 
     messages_tutor.forEach(m => {
       geminiMessages.push({ role: m.role === 'assistant' ? 'model' : 'user', parts:[{text: m.content}] });
     });
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,{
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:geminiMessages,generationConfig:{temperature:0.7,maxOutputTokens:1000}})
@@ -1810,7 +1914,12 @@ Citas artículos específicos y jurisprudencia de Corte Constitucional (T-, C-, 
     const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No pude generar respuesta.';
     STATE.chatHistory.push({ role:'ai', text:aiText });
   } catch(err) {
-    STATE.chatHistory.push({ role:'ai', text:`**Error de conexión:** ${err.message}\n\nEl tutor usa la API de Google AI (Gemini). Requiere API key configurada por el administrador.` });
+    const is429 = err.message?.includes('429') || err.message?.includes('quota') || err.message?.includes('Quota');
+    if (is429) {
+      STATE.chatHistory.push({ role:'ai', text:'⚠️ **Cuota de IA temporalmente agotada.**\n\nEl plan gratuito de Google AI Studio tiene límites de solicitudes por minuto. Por favor espera 1-2 minutos antes de intentar de nuevo.\n\nMientras tanto, puedes consultar las **Flashcards Jurídicas** o practicar con el **banco de preguntas**.' });
+    } else {
+      STATE.chatHistory.push({ role:'ai', text:`**Error de conexión:** ${err.message}\n\nEl tutor usa la API de Google Gemini. ${err.message?.includes('no configurada') ? 'El administrador debe configurar la API key en el panel de administración.' : 'Verifica que la API key sea válida.'}` });
+    }
   }
   if(msgsEl) { msgsEl.innerHTML = STATE.chatHistory.map(m=>renderMessage(m)).join(''); msgsEl.scrollTop = msgsEl.scrollHeight; }
 }
@@ -1978,7 +2087,7 @@ async function generateAIPlan() {
   const daysLeft = Math.max(1, Math.ceil((STATE.examDate - new Date())/86400000));
   const weakSubjects = SUBJECTS.filter(s=>(STATE.subjectProgress[s.id]||50)<60).map(s=>s.name).join(', ');
   try {
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${key}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:`Soy estudiante de derecho preparándome para el Examen de Estado de Idoneidad para Abogados en Colombia (Ley 1905/2018). Me quedan ${daysLeft} días. Mis materias más débiles son: ${weakSubjects||'todas las materias'}. Crea un plan de estudio semanal práctico, estructurado y motivador con sesiones diarias de 3-4 horas. Usa emojis, sé específico sobre qué estudiar cada día. Máximo 8 puntos concisos. Responde en español.`}]}],generationConfig:{temperature:0.7,maxOutputTokens:500}})
     });
@@ -2236,7 +2345,7 @@ async function testGeminiKey() {
   if (!key) { if(resEl) resEl.innerHTML = '<div class="text-xs text-red">Ingresa tu API key para probar.</div>'; return; }
   if(resEl) resEl.innerHTML = '<div class="text-xs text-muted">Probando conexión... <span class="loading-dot"></span><span class="loading-dot"></span></div>';
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${key}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:'Responde solo: "LexPrep conectado"'}]}],generationConfig:{maxOutputTokens:20}})
     });
@@ -2484,17 +2593,29 @@ async function saveAdminGeminiKey() {
 async function testAdminKey() {
   const key = document.getElementById('admin-gemini-key')?.value?.trim();
   const resEl = document.getElementById('admin-key-test');
-  if(!key) { if(resEl) resEl.innerHTML='<div class="text-xs text-red">Ingresa una key primero.</div>'; return; }
-  if(resEl) resEl.innerHTML='<div class="text-xs text-muted">Probando... <span class="loading-dot"></span><span class="loading-dot"></span></div>';
+  if(!key) { if(resEl) resEl.innerHTML='<div style="color:var(--red);font-size:12px">Ingresa una API key primero.</div>'; return; }
+  if(resEl) resEl.innerHTML='<div style="font-size:12px;color:var(--text-muted)">Probando conexión... <span class="loading-dot"></span><span class="loading-dot"></span></div>';
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${key}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:'Di solo: ok'}]}],generationConfig:{maxOutputTokens:5}})
     });
-    if(!r.ok) throw new Error('Error '+r.status);
-    if(resEl) resEl.innerHTML='<div style="color:var(--green);font-size:12px">✅ Key válida — Gemini conectado correctamente.</div>';
+    if(r.status === 429) {
+      if(resEl) resEl.innerHTML='<div style="color:var(--amber);font-size:12px">✅ API key válida. Cuota momentáneamente agotada (límite gratuito/minuto). Espera 1 minuto y funcionará normalmente.</div>';
+      return;
+    }
+    if(r.status === 401 || r.status === 403) {
+      if(resEl) resEl.innerHTML='<div style="color:var(--red);font-size:12px">❌ API key inválida o sin permisos. Verifica que sea de aistudio.google.com.</div>';
+      return;
+    }
+    if(!r.ok) {
+      const err = await r.json().catch(()=>({}));
+      if(resEl) resEl.innerHTML=`<div style="color:var(--red);font-size:12px">❌ Error ${r.status}: ${err.error?.message||'desconocido'}</div>`;
+      return;
+    }
+    if(resEl) resEl.innerHTML='<div style="color:var(--green);font-size:12px">✅ API key válida — Google Gemini conectado correctamente.</div>';
   } catch(e) {
-    if(resEl) resEl.innerHTML=`<div style="color:var(--red);font-size:12px">❌ Error: ${e.message}</div>`;
+    if(resEl) resEl.innerHTML=`<div style="color:var(--red);font-size:12px">❌ Error de red: ${e.message}</div>`;
   }
 }
 
@@ -2614,10 +2735,41 @@ window.addEventListener('load', async () => {
   if (savedBin) JSONBIN.BIN_ID = savedBin;
   if (savedKey) JSONBIN.API_KEY = savedKey;
   
-  // Load DB
+  // Load DB from JSONBin
   await dbLoad();
-  
-  // Show login
+
+  // Try to restore session
+  const session = loadSession();
+  if (session) {
+    if (session.isAdmin) {
+      // Restore admin session
+      STATE.isAdmin = true;
+      enterAdminPanel();
+      return;
+    }
+    // Restore student session
+    const user = DB.users.find(u => u.id === session.userId);
+    if (user && user.status === 'active') {
+      STATE.currentUser = user;
+      STATE.isAdmin = false;
+      STATE.xp = session.xp ?? user.xp ?? 0;
+      STATE.streak = session.streak ?? user.streak ?? 0;
+      STATE.totalQuestions = session.totalQuestions ?? user.totalQ ?? 0;
+      STATE.correctAnswers = session.correctAnswers ?? user.correctQ ?? 0;
+      STATE.subjectProgress = session.subjectProgress ?? {};
+      STATE.simResults = session.simResults ?? [];
+      STATE.quizHistory = session.quizHistory ?? [];
+      STATE.geminiKey = DB.config.geminiKey || '';
+      if (session.examDate) STATE.examDate = new Date(session.examDate);
+      else if (user.examDate) STATE.examDate = new Date(user.examDate);
+      enterApp();
+      return;
+    }
+    // Session found but user not valid - clear it
+    clearSession();
+  }
+
+  // No valid session - show login
   showScreen('login');
 });
 </script>
