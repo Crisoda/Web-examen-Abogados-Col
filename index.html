@@ -744,7 +744,14 @@ async function dbLoad() {
     });
     if (r.ok) {
       const data = await r.json();
-      if (data.record) DB = { ...DB, ...data.record };
+      if (data.record) {
+        DB = { ...DB, ...data.record };
+        // Sync geminiKey from config to STATE
+        if (DB.config?.geminiKey) STATE.geminiKey = DB.config.geminiKey;
+        // Sync JSONBin credentials if stored in config
+        if (DB.config?.binId) JSONBIN.BIN_ID = DB.config.binId;
+        if (DB.config?.binApiKey) JSONBIN.API_KEY = DB.config.binApiKey;
+      }
     }
   } catch(e) { console.log('JSONBin load failed (offline mode):', e.message); }
 }
@@ -911,6 +918,7 @@ async function doLogin() {
   STATE.totalQuestions = user.totalQ || 0;
   STATE.correctAnswers = user.correctQ || 0;
   STATE.geminiKey = DB.config.geminiKey || '';
+  if (user.examDate) STATE.examDate = new Date(user.examDate);
   enterApp();
 }
 
@@ -1308,18 +1316,16 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional, sin markdown, sin ba
 }
 La opción ${['A','B','C','D'][randomCorrect]} DEBE ser la correcta. Su feedback debe ser el más extenso con citas normativas y jurisprudenciales.`;
 
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const geminiKey = STATE.geminiKey || DB.config.geminiKey;
+    if (!geminiKey) throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel.');
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1500,
-        messages:[{ role:'user', content: prompt }]
-      })
+      body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.8,maxOutputTokens:1500}})
     });
-    if(!resp.ok) throw new Error('Error API '+resp.status);
+    if(!resp.ok) { const e=await resp.json().catch(()=>({})); throw new Error('Error API '+(e.error?.message||resp.status)); }
     const data = await resp.json();
-    let text = data.content?.[0]?.text || '';
+    let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     text = text.replace(/```json|```/g,'').trim();
     const q = JSON.parse(text);
     const aiQ = { id:Date.now(), subject:subjectId, subjectName, type:'situacional', caseText:q.caseText, text:q.text, options:q.options, correct:q.correct, feedback:q.feedback };
@@ -1510,14 +1516,16 @@ Genera UNA pregunta sobre ${s.name} con estas características OBLIGATORIAS:
 JSON válido únicamente, sin texto extra:
 {"caseText":"caso detallado 5-8 oraciones","text":"pregunta técnica","options":["A larga","B larga","C larga","D larga"],"correct":${randomCorrect},"feedback":["análisis A con norma","análisis B","análisis C","análisis D"]}`;
 
-      const resp = await fetch('https://api.anthropic.com/v1/messages',{
+      const geminiKey = STATE.geminiKey || DB.config.geminiKey;
+      if (!geminiKey) throw new Error('No hay API key configurada');
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,messages:[{role:'user',content:prompt}]})
+        body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.8,maxOutputTokens:1500}})
       });
       if(!resp.ok) throw new Error('HTTP '+resp.status);
       const data = await resp.json();
-      let txt = data.content?.[0]?.text||'';
+      let txt = data.candidates?.[0]?.content?.parts?.[0]?.text||'';
       txt = txt.replace(/```json|```/g,'').trim();
       const q = JSON.parse(txt);
       questions.push({id:Date.now()+i,subject:s.id,subjectName:s.name,type:'situacional',caseText:q.caseText,text:q.text,options:q.options,correct:q.correct,feedback:q.feedback});
@@ -1703,7 +1711,7 @@ function renderTutor(el) {
   }
   el.innerHTML = `
   <div class="page-header">
-    <div><div class="page-title">Tutor Jurídico IA 🤖</div><div class="page-subtitle">Powered by Claude · Especialista en Derecho Colombiano</div></div>
+    <div><div class="page-title">Tutor Jurídico IA 🤖</div><div class="page-subtitle">Powered by Google Gemini · Especialista en Derecho Colombiano</div></div>
   </div>
   <div class="page-body" style="height:calc(100vh - 160px);display:flex;flex-direction:column;gap:16px">
 
@@ -1782,25 +1790,27 @@ Citas artículos específicos y jurisprudencia de Corte Constitucional (T-, C-, 
   const messages_tutor = STATE.chatHistory.slice(-10).map(m=>({ role: m.role==='ai' ? 'assistant' : 'user', content: m.text }));
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const geminiKey = STATE.geminiKey || DB.config.geminiKey;
+    if (!geminiKey) throw new Error('API key de Google AI no configurada. El administrador debe configurarla.');
+    // Build Gemini messages (no system role in Gemini, include as first user turn)
+    const geminiMessages = [{ role:'user', parts:[{text: SYSTEM_TUTOR + '\n\n---\nHistorial de conversación:'}] }, { role:'model', parts:[{text:'Entendido, estoy listo para ayudarte.'}] }];
+    messages_tutor.forEach(m => {
+      geminiMessages.push({ role: m.role === 'assistant' ? 'model' : 'user', parts:[{text: m.content}] });
+    });
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        system: SYSTEM_TUTOR,
-        messages: messages_tutor
-      })
+      body:JSON.stringify({contents:geminiMessages,generationConfig:{temperature:0.7,maxOutputTokens:1000}})
     });
     if(!resp.ok) {
       const errData = await resp.json().catch(()=>({}));
-      throw new Error('Error '+resp.status+' — '+(errData.error?.message||'Verifica la configuración'));
+      throw new Error('Error '+resp.status+' — '+(errData.error?.message||'Verifica la API key en configuración admin'));
     }
     const data = await resp.json();
-    const aiText = data.content?.[0]?.text || 'No pude generar respuesta.';
+    const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No pude generar respuesta.';
     STATE.chatHistory.push({ role:'ai', text:aiText });
   } catch(err) {
-    STATE.chatHistory.push({ role:'ai', text:`**Error de conexión:** ${err.message}\n\nEl tutor usa la API de Claude (Anthropic). La conexión se realiza automáticamente.` });
+    STATE.chatHistory.push({ role:'ai', text:`**Error de conexión:** ${err.message}\n\nEl tutor usa la API de Google AI (Gemini). Requiere API key configurada por el administrador.` });
   }
   if(msgsEl) { msgsEl.innerHTML = STATE.chatHistory.map(m=>renderMessage(m)).join(''); msgsEl.scrollTop = msgsEl.scrollHeight; }
 }
@@ -1961,10 +1971,9 @@ function renderPlanner(el) {
 }
 
 async function generateAIPlan() {
-  const key = document.getElementById('plan-key')?.value || STATE.geminiKey;
+  const key = STATE.geminiKey || DB.config.geminiKey;
   const resEl = document.getElementById('ai-plan-result');
-  if (!key) { if(resEl) resEl.innerHTML = '<div class="text-xs text-muted">Agrega tu API key para usar esta función.</div>'; return; }
-  STATE.geminiKey = key;
+  if (!key) { if(resEl) resEl.innerHTML = '<div class="text-xs text-amber" style="color:var(--amber)">⚠️ El administrador aún no ha configurado la API key de Google AI. Contacta al administrador.</div>'; return; }
   if(resEl) resEl.innerHTML = '<div class="text-xs text-muted">Generando tu plan personalizado... <span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>';
   const daysLeft = Math.max(1, Math.ceil((STATE.examDate - new Date())/86400000));
   const weakSubjects = SUBJECTS.filter(s=>(STATE.subjectProgress[s.id]||50)<60).map(s=>s.name).join(', ');
@@ -2183,24 +2192,20 @@ function renderSettings(el) {
 
 
     <div class="card mb-4">
-      <div class="section-title" style="margin-bottom:16px">🗃️ Persistencia de datos</div>
-      <div class="text-sm text-secondary mb-3" style="line-height:1.6">Para guardar tu progreso entre sesiones en diferentes dispositivos, configura un bin de JSONBin.io (gratuito).</div>
+      <div class="section-title" style="margin-bottom:16px">🔑 Cambiar contraseña</div>
       <div class="form-group">
-        <label class="form-label">JSONBin Bin ID</label>
-        <input class="form-input font-mono" type="text" id="set-binid" value="${JSONBIN.BIN_ID !== 'TU_BIN_ID_AQUI' ? JSONBIN.BIN_ID : ''}" placeholder="6652a3e2acd3cb34a83e63a1" />
+        <label class="form-label">Contraseña actual</label>
+        <input class="form-input" type="password" id="set-pass-old" placeholder="••••••••" />
       </div>
       <div class="form-group">
-        <label class="form-label">JSONBin API Key</label>
-        <input class="form-input font-mono" type="password" id="set-apikey" value="${JSONBIN.API_KEY !== 'TU_API_KEY_AQUI' ? JSONBIN.API_KEY : ''}" placeholder="\$2a\$10\$..." />
+        <label class="form-label">Nueva contraseña</label>
+        <input class="form-input" type="password" id="set-pass-new" placeholder="Mínimo 6 caracteres" />
       </div>
-      <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:12px;font-size:12px;color:var(--text-secondary);line-height:1.7;margin-bottom:12px">
-        📋 <strong style="color:var(--amber)">Cómo configurar JSONBin:</strong><br>
-        1. Ve a <a href="https://jsonbin.io" target="_blank" style="color:var(--blue-jur)">jsonbin.io</a> y crea una cuenta gratuita<br>
-        2. Crea un nuevo Bin con el contenido <code style="color:var(--gold)">{"users":[],"config":{}}</code><br>
-        3. Copia el Bin ID y tu API Master Key<br>
-        4. Pégalos arriba y recarga la página
+      <div class="form-group">
+        <label class="form-label">Confirmar nueva contraseña</label>
+        <input class="form-input" type="password" id="set-pass-confirm" placeholder="Repite la nueva contraseña" />
       </div>
-      <button onclick="saveJsonbinConfig()" style="background:var(--green-dim);border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--green);cursor:pointer">Guardar configuración JSONBin</button>
+      <button onclick="changePassword()" style="background:var(--blue-dim);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;color:var(--blue-jur);cursor:pointer">Cambiar contraseña</button>
     </div>
 
     <div class="card">
@@ -2218,9 +2223,8 @@ function saveSettings() {
   if (name && STATE.currentUser) STATE.currentUser.name = name;
   if (uni && STATE.currentUser) STATE.currentUser.uni = uni;
   if (date) STATE.examDate = new Date(date);
-  if (gemini) STATE.geminiKey = gemini;
   const u = DB.users.find(u=>u.id===STATE.currentUser?.id);
-  if(u) { if(name) u.name=name; if(uni) u.uni=uni; }
+  if(u) { if(name) u.name=name; if(uni) u.uni=uni; if(date) u.examDate=date; }
   saveUserProgress();
   document.getElementById('user-name-sidebar').textContent = (name||STATE.currentUser?.name||'').split(' ').slice(0,2).join(' ');
   alert('✅ Cambios guardados correctamente.');
@@ -2245,14 +2249,26 @@ async function testGeminiKey() {
 }
 
 function saveJsonbinConfig() {
-  const binId = document.getElementById('set-binid')?.value?.trim();
-  const apiKey = document.getElementById('set-apikey')?.value?.trim();
-  if (!binId || !apiKey) { alert('Completa ambos campos de JSONBin.'); return; }
-  JSONBIN.BIN_ID = binId;
-  JSONBIN.API_KEY = apiKey;
-  localStorage.setItem('lp_bin', binId);
-  localStorage.setItem('lp_key', apiKey);
-  alert('✅ Configuración de JSONBin guardada. Recarga la página para sincronizar.');
+  // This function is kept for compatibility but users no longer configure JSONBin
+  alert('La configuración de persistencia es gestionada por el administrador.');
+}
+
+async function changePassword() {
+  const oldPass = document.getElementById('set-pass-old')?.value;
+  const newPass = document.getElementById('set-pass-new')?.value;
+  const confirmPass = document.getElementById('set-pass-confirm')?.value;
+  if (!oldPass || !newPass || !confirmPass) { alert('Completa todos los campos.'); return; }
+  if (newPass.length < 6) { alert('La nueva contraseña debe tener mínimo 6 caracteres.'); return; }
+  if (newPass !== confirmPass) { alert('Las contraseñas nuevas no coinciden.'); return; }
+  const u = DB.users.find(u => u.id === STATE.currentUser?.id);
+  if (!u || u.pass !== oldPass) { alert('❌ La contraseña actual es incorrecta.'); return; }
+  u.pass = newPass;
+  STATE.currentUser.pass = newPass;
+  await dbSave();
+  alert('✅ Contraseña cambiada exitosamente.');
+  document.getElementById('set-pass-old').value = '';
+  document.getElementById('set-pass-new').value = '';
+  document.getElementById('set-pass-confirm').value = '';
 }
 
 function resetProgress() {
@@ -2309,6 +2325,7 @@ function renderAdminUsers(el) {
             <td><div style="display:flex;gap:6px">
               <button onclick="toggleUserStatus(${u.id})" style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary)">${u.status==='active'?'Desactivar':'Activar'}</button>
               <button onclick="deleteUser(${u.id})" style="background:var(--red-dim);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;color:var(--red)">Eliminar</button>
+              <button onclick="resetUserPass(${u.id})" style="background:var(--blue-dim);border:1px solid rgba(59,130,246,0.3);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;color:var(--blue-jur)">Resetear pass</button>
             </div></td>
           </tr>`).join('')}
         </tbody>
@@ -2342,6 +2359,14 @@ async function deleteUser(id) {
   if (!confirm('¿Seguro que deseas eliminar este usuario? Esta acción no se puede deshacer.')) return;
   const idx = DB.users.findIndex(u=>u.id===id);
   if(idx>-1) { DB.users.splice(idx,1); await dbSave(); renderAdminUsers(document.getElementById('admin-page-users')); }
+}
+
+async function resetUserPass(id) {
+  const newPass = prompt('Nueva contraseña para el usuario (mínimo 6 caracteres):');
+  if (!newPass) return;
+  if (newPass.length < 6) { alert('La contraseña debe tener mínimo 6 caracteres.'); return; }
+  const u = DB.users.find(u=>u.id===id);
+  if (u) { u.pass = newPass; await dbSave(); alert('✅ Contraseña de '+u.name+' actualizada a: '+newPass); }
 }
 
 async function createUser() {
@@ -2401,9 +2426,24 @@ function renderAdminConfig(el) {
   <div class="page-header"><div class="page-title">Configuración Global</div><div class="page-subtitle">Configura la API key y parámetros de la plataforma</div></div>
   <div class="page-body" style="max-width:700px">
     <div class="card mb-4">
-      <div class="section-title" style="font-size:16px;margin-bottom:16px">🤖 API de IA (Claude)</div>
-      <div class="text-sm text-secondary mb-3" style="line-height:1.6">LexPrep usa <strong style="color:var(--gold)">Claude (Anthropic)</strong> para el Tutor Jurídico IA, la generación de preguntas y los simulacros. La conexión es automática — no requiere configuración adicional de API key.</div>
-      <div style="background:var(--green-dim);border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:12px;font-size:13px;color:var(--green)">✅ Claude API conectada automáticamente · Todas las funciones de IA están disponibles</div>
+      <div class="section-title" style="font-size:16px;margin-bottom:16px">🤖 API Key — Google AI Studio (Gemini)</div>
+      <div class="text-sm text-secondary mb-3" style="line-height:1.6">LexPrep usa <strong style="color:var(--gold)">Google Gemini</strong> para el Tutor Jurídico IA, la generación de preguntas y los simulacros. Configura la API key global aquí — todos los estudiantes la usarán automáticamente.</div>
+      <div class="form-group">
+        <label class="form-label">API Key Google AI Studio</label>
+        <input class="form-input font-mono" type="password" id="admin-gemini-key" value="${DB.config.geminiKey||''}" placeholder="AIza..." />
+      </div>
+      <div id="admin-key-test" style="margin-bottom:10px"></div>
+      <div style="background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:12px;font-size:12px;color:var(--text-secondary);line-height:1.8;margin-bottom:12px">
+        📋 <strong style="color:var(--blue-jur)">Cómo obtener tu API key gratis:</strong><br>
+        1. Ve a <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--blue-jur)">aistudio.google.com/apikey</a><br>
+        2. Inicia sesión con Google → Haz clic en "Create API Key"<br>
+        3. Copia la key generada (empieza con <code style="color:var(--gold)">AIza...</code>)<br>
+        4. Pégala arriba y guarda
+      </div>
+      <div style="display:flex;gap:10px">
+        <button onclick="saveAdminGeminiKey()" style="background:var(--gold-dim);border:1px solid var(--gold-border);border-radius:8px;padding:10px 20px;font-size:13px;font-weight:600;color:var(--gold);cursor:pointer">Guardar API Key</button>
+        <button onclick="testAdminKey()" style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:10px 20px;font-size:13px;color:var(--text-secondary);cursor:pointer">🔍 Probar conexión</button>
+      </div>
     </div>
 
     <div class="card mb-4">
@@ -2438,7 +2478,7 @@ async function saveAdminGeminiKey() {
   DB.config.geminiKey = key;
   STATE.geminiKey = key;
   await dbSave();
-  alert('✅ API key global guardada. Todos los usuarios podrán usar la IA.');
+  alert('✅ API key de Google AI guardada globalmente. Todos los estudiantes podrán usar la IA.');
 }
 
 async function testAdminKey() {
@@ -2472,30 +2512,96 @@ async function saveAdminJsonbin() {
   if(!binId||!apiKey) { alert('Completa ambos campos.'); return; }
   JSONBIN.BIN_ID = binId;
   JSONBIN.API_KEY = apiKey;
+  // Save to localStorage as bootstrap for future loads
   localStorage.setItem('lp_bin', binId);
   localStorage.setItem('lp_key', apiKey);
+  // Save into DB.config so they persist in the bin itself
+  DB.config.binId = binId;
+  DB.config.binApiKey = apiKey;
   await dbSave();
-  alert('✅ JSONBin configurado. Los datos ahora se sincronizan en la nube.');
+  alert('✅ JSONBin configurado. Los datos de usuarios y configuración ahora se sincronizan en la nube.');
 }
 
 function renderAdminContent(el) {
+  const extraSubjects = DB.config.extraSubjects || [];
+  const allSubjects = [...SUBJECTS, ...extraSubjects.map(s=>({id:'extra_'+Date.now()+'_'+Math.random(), name:s, icon:'📖', color:'var(--gold)', isCustom:true}))];
   el.innerHTML = `
-  <div class="page-header"><div class="page-title">Gestión de Contenido</div><div class="page-subtitle">Banco de preguntas, flashcards y materiales</div></div>
+  <div class="page-header"><div class="page-title">Gestión de Contenido</div><div class="page-subtitle">Materias, preguntas y materiales de la plataforma</div></div>
   <div class="page-body">
     <div class="grid-3 mb-6">
-      ${[['✨','Generación IA','Preguntas ilimitadas'],['🃏','Flashcards',FLASHCARDS_DATA.length+' tarjetas'],['📚','Materias',SUBJECTS.length+' áreas']].map(([icon,name,count])=>`
+      ${[['✨','Generación IA','Preguntas ilimitadas'],['🃏','Flashcards',FLASHCARDS_DATA.length+' tarjetas'],['📚','Materias',(SUBJECTS.length + extraSubjects.length)+' áreas']].map(([icon,name,count])=>`
       <div class="card" style="text-align:center;padding:28px">
         <div style="font-size:32px;margin-bottom:12px">${icon}</div>
         <div class="font-serif font-700 text-lg mb-1">${name}</div>
         <div class="text-secondary text-sm mb-4">${count}</div>
       </div>`).join('')}
     </div>
-      <div class="card">
-      <div class="section-title" style="font-size:14px">Estado de contenido</div>
-      <div class="text-secondary text-sm" style="line-height:1.7;padding:12px 0">Las preguntas son generadas dinámicamente por la IA (Claude API) en tiempo real. No hay banco estático de preguntas. El contenido se adapta automáticamente al nivel del estudiante.</div>
-      <div style="background:var(--green-dim);border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:12px;font-size:13px;color:var(--green)">✅ Sistema de generación IA activo · Preguntas ilimitadas y adaptativas</div>
+
+    <div class="card mb-4">
+      <div class="section-title" style="font-size:16px;margin-bottom:12px">📚 Agregar nueva materia o convocatoria</div>
+      <div class="text-sm text-secondary mb-3" style="line-height:1.6">Describe la nueva materia o convocatoria. La IA interpretará el contexto y generará preguntas adaptadas al tema indicado (ej: "Convocatoria DIAN 2025", "Derecho Internacional Público", "Concurso Notarial").</div>
+      <div class="form-group">
+        <label class="form-label">Nombre de la materia / convocatoria *</label>
+        <input class="form-input" type="text" id="new-subject-name" placeholder="Ej: Derecho Internacional Público, Convocatoria Fiscalía 2025..." />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Descripción para la IA (instrucciones de contenido)</label>
+        <textarea class="form-input" id="new-subject-desc" rows="3" placeholder="Ej: Preguntas sobre tratados internacionales, DIDH, derecho consular, Convención de Viena, inmunidad diplomática, aplicables al examen de ingreso a la Cancillería colombiana." style="resize:vertical"></textarea>
+      </div>
+      <button onclick="addNewSubject()" style="background:var(--gold-dim);border:1px solid var(--gold-border);border-radius:8px;padding:10px 20px;font-size:13px;font-weight:600;color:var(--gold);cursor:pointer">+ Agregar materia</button>
+    </div>
+
+    <div class="card mb-4">
+      <div class="section-title" style="font-size:16px;margin-bottom:12px">📋 Materias base del sistema</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        ${SUBJECTS.map(s=>`<div style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px 14px;font-size:13px;display:flex;align-items:center;gap:6px">${s.icon} ${s.name}</div>`).join('')}
+      </div>
+    </div>
+
+    ${extraSubjects.length ? `<div class="card mb-4">
+      <div class="section-title" style="font-size:16px;margin-bottom:12px">✨ Materias personalizadas agregadas</div>
+      ${extraSubjects.map((s,i)=>`
+      <div style="background:var(--bg-elevated);border:1px solid var(--gold-border);border-radius:8px;padding:12px 16px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:14px;font-weight:500;color:var(--gold)">📖 ${s.name}</div>
+          ${s.desc ? '<div class="text-xs text-muted mt-1">'+s.desc+'</div>' : ''}
+        </div>
+        <button onclick="removeCustomSubject(${i})" style="background:var(--red-dim);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;color:var(--red)">Eliminar</button>
+      </div>`).join('')}
+    </div>` : ''}
+
+    <div class="card">
+      <div class="section-title" style="font-size:14px">⚡ Estado del sistema de IA</div>
+      <div class="text-secondary text-sm" style="line-height:1.7;padding:12px 0">Las preguntas son generadas dinámicamente por <strong style="color:var(--gold)">Google Gemini</strong> en tiempo real, usando la API key configurada. El contenido se adapta automáticamente al nivel del estudiante y a las materias configuradas.</div>
+      <div style="background:var(--${DB.config.geminiKey?'green':'amber'}-dim);border:1px solid rgba(${DB.config.geminiKey?'16,185,129':'245,158,11'},0.3);border-radius:8px;padding:12px;font-size:13px;color:var(--${DB.config.geminiKey?'green':'amber'})">${DB.config.geminiKey?'✅ Google Gemini API configurada · Preguntas ilimitadas y adaptativas':'⚠️ API key no configurada — Ve a Configuración para ingresar la API key de Google AI Studio'}</div>
     </div>
   </div>`;
+}
+
+async function addNewSubject() {
+  const name = document.getElementById('new-subject-name')?.value?.trim();
+  const desc = document.getElementById('new-subject-desc')?.value?.trim();
+  if (!name) { alert('Ingresa el nombre de la materia.'); return; }
+  if (!DB.config.extraSubjects) DB.config.extraSubjects = [];
+  // Check for duplicate
+  if (DB.config.extraSubjects.find(s=>s.name.toLowerCase()===name.toLowerCase())) { alert('Ya existe una materia con ese nombre.'); return; }
+  DB.config.extraSubjects.push({ name, desc: desc||'' });
+  // Also add to SUBJECTS array for AI generation
+  SUBJECTS.push({ id: 'custom_'+Date.now(), name, icon:'📖', color:'var(--gold)', desc: desc||'' });
+  await dbSave();
+  alert('✅ Materia "'+name+'" agregada. La IA ya puede generar preguntas sobre este tema.');
+  renderAdminContent(document.getElementById('admin-page-content'));
+}
+
+async function removeCustomSubject(idx) {
+  if (!confirm('¿Eliminar esta materia personalizada?')) return;
+  const name = DB.config.extraSubjects[idx]?.name;
+  DB.config.extraSubjects.splice(idx, 1);
+  // Remove from SUBJECTS array too
+  const si = SUBJECTS.findIndex(s=>s.name===name);
+  if (si>-1) SUBJECTS.splice(si,1);
+  await dbSave();
+  renderAdminContent(document.getElementById('admin-page-content'));
 }
 
 // =============================================
