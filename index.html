@@ -1404,7 +1404,7 @@ La opción ${['A','B','C','D'][randomCorrect]} DEBE ser la correcta. Su feedback
 
     const geminiKey = STATE.geminiKey || DB.config.geminiKey;
     if (!geminiKey) throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel.');
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`,{
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.8,maxOutputTokens:1500}})
@@ -1622,7 +1622,7 @@ JSON válido únicamente, sin texto extra:
 
       const geminiKey = STATE.geminiKey || DB.config.geminiKey;
       if (!geminiKey) throw new Error('No hay API key configurada');
-      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`,{
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.8,maxOutputTokens:1500}})
@@ -1901,7 +1901,7 @@ Citas artículos específicos y jurisprudencia de Corte Constitucional (T-, C-, 
     messages_tutor.forEach(m => {
       geminiMessages.push({ role: m.role === 'assistant' ? 'model' : 'user', parts:[{text: m.content}] });
     });
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`,{
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:geminiMessages,generationConfig:{temperature:0.7,maxOutputTokens:1000}})
@@ -2087,7 +2087,7 @@ async function generateAIPlan() {
   const daysLeft = Math.max(1, Math.ceil((STATE.examDate - new Date())/86400000));
   const weakSubjects = SUBJECTS.filter(s=>(STATE.subjectProgress[s.id]||50)<60).map(s=>s.name).join(', ');
   try {
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${key}`,{
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:`Soy estudiante de derecho preparándome para el Examen de Estado de Idoneidad para Abogados en Colombia (Ley 1905/2018). Me quedan ${daysLeft} días. Mis materias más débiles son: ${weakSubjects||'todas las materias'}. Crea un plan de estudio semanal práctico, estructurado y motivador con sesiones diarias de 3-4 horas. Usa emojis, sé específico sobre qué estudiar cada día. Máximo 8 puntos concisos. Responde en español.`}]}],generationConfig:{temperature:0.7,maxOutputTokens:500}})
     });
@@ -2345,7 +2345,7 @@ async function testGeminiKey() {
   if (!key) { if(resEl) resEl.innerHTML = '<div class="text-xs text-red">Ingresa tu API key para probar.</div>'; return; }
   if(resEl) resEl.innerHTML = '<div class="text-xs text-muted">Probando conexión... <span class="loading-dot"></span><span class="loading-dot"></span></div>';
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${key}`,{
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:'Responde solo: "LexPrep conectado"'}]}],generationConfig:{maxOutputTokens:20}})
     });
@@ -2596,7 +2596,7 @@ async function testAdminKey() {
   if(!key) { if(resEl) resEl.innerHTML='<div style="color:var(--red);font-size:12px">Ingresa una API key primero.</div>'; return; }
   if(resEl) resEl.innerHTML='<div style="font-size:12px;color:var(--text-muted)">Probando conexión... <span class="loading-dot"></span><span class="loading-dot"></span></div>';
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${key}`,{
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({contents:[{parts:[{text:'Di solo: ok'}]}],generationConfig:{maxOutputTokens:5}})
     });
