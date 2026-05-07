@@ -1435,17 +1435,17 @@ La opción ${['A','B','C','D'][randomCorrect]} DEBE ser la correcta. Su feedback
       }, 300);
       return;
     }
-    el.innerHTML = \`
-    <div class="page-header"><div class="page-title">Preguntas con IA ✨</div></div>
-    <div class="page-body" style="max-width:780px;margin:0 auto">
-      <div class="card" style="text-align:center;padding:40px">
-        <div style="font-size:40px;margin-bottom:16px">⚠️</div>
-        <div class="font-serif text-lg font-700 mb-2">Error al generar pregunta</div>
-        <div class="text-secondary text-sm mb-4">\${err.message}</div>
-        \${err.message?.includes('no configurada') ? '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;font-size:13px;color:var(--amber);margin-bottom:16px">El administrador debe ingresar la API key de Google AI Studio en el panel de administración.</div>' : ''}
-        <button onclick="renderQuiz(document.getElementById('page-quiz'))" class="btn-primary" style="width:auto;padding:10px 24px">← Volver</button>
-      </div>
-    </div>\`;
+    const errMsg = err.message || 'Error desconocido';
+    const needsKey = errMsg.includes('no configurada');
+    el.innerHTML = '<div class="page-header"><div class="page-title">Preguntas con IA ✨</div></div>'
+      + '<div class="page-body" style="max-width:780px;margin:0 auto">'
+      + '<div class="card" style="text-align:center;padding:40px">'
+      + '<div style="font-size:40px;margin-bottom:16px">⚠️</div>'
+      + '<div class="font-serif text-lg font-700 mb-2">Error al generar pregunta</div>'
+      + '<div class="text-secondary text-sm mb-4">' + errMsg + '</div>'
+      + (needsKey ? '<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;font-size:13px;color:var(--amber);margin-bottom:16px">El administrador debe ingresar la API key en el panel de administración.</div>' : '')
+      + '<button onclick="renderQuiz(document.getElementById(&quot;page-quiz&quot;))" class="btn-primary" style="width:auto;padding:10px 24px">&#8592; Volver</button>'
+      + '</div></div>';
   }
 }
 
