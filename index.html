@@ -1607,6 +1607,7 @@ function formatText(t) {
   if (!t) return '';
   return t.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>');
 }
+function simSelectOption(i) {
   STATE.simState.answers[STATE.simState.current] = i;
   renderSimulatorActive(document.getElementById('page-simulator'));
 }
