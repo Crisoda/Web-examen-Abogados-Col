@@ -956,6 +956,65 @@ const FLASHCARDS_DATA = [
 ];
 
 // =============================================
+// GEMINI API HELPER — retry con backoff automático
+// =============================================
+const GEMINI_MODELS = [
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
+];
+
+async function geminiCall(prompt, genConfig = {}) {
+  const key = STATE.geminiKey || DB.config.geminiKey;
+  if (!key) throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel.');
+
+  const cfg = { temperature: 0.8, maxOutputTokens: 1500, ...genConfig };
+  const body = JSON.stringify({ contents:[{ parts:[{ text: prompt }] }], generationConfig: cfg });
+
+  // Intentar cada modelo en orden; si da 429 esperar y reintentar hasta 3 veces
+  for (const model of GEMINI_MODELS) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const resp = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body });
+        if (resp.status === 429) {
+          // Cuota agotada para este modelo: esperar y reintentar
+          const waitMs = attempt * 8000; // 8s, 16s, 24s
+          await new Promise(r => setTimeout(r, waitMs));
+          lastErr = new Error('429_quota');
+          continue;
+        }
+        if (resp.status === 404 || resp.status === 400) {
+          // Modelo no disponible, pasar al siguiente
+          lastErr = new Error(`model_unavailable_${resp.status}`);
+          break; // salir del bucle de reintentos, probar siguiente modelo
+        }
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error('Error API ' + (e.error?.message || resp.status));
+        }
+        const data = await resp.json();
+        const text = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/```json|```/g, '').trim();
+        return text; // éxito
+      } catch (err) {
+        if (err.message === '429_quota' || err.message?.startsWith('model_unavailable')) {
+          lastErr = err;
+        } else {
+          throw err; // error real, no de cuota
+        }
+      }
+    }
+    // Si después de 3 intentos sigue 429 en este modelo, probar el siguiente
+    if (lastErr && !lastErr.message?.startsWith('model_unavailable')) {
+      // fue 429 persistente, continuar al siguiente modelo
+    }
+  }
+  throw new Error('Todos los modelos de IA están temporalmente saturados. Intenta en 1–2 minutos.');
+}
+
+// =============================================
 // AUTH
 // =============================================
 function showScreen(name) {
@@ -1402,17 +1461,7 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional, sin markdown, sin ba
 }
 La opción ${['A','B','C','D'][randomCorrect]} DEBE ser la correcta. Su feedback debe ser el más extenso con citas normativas y jurisprudenciales.`;
 
-    const geminiKey = STATE.geminiKey || DB.config.geminiKey;
-    if (!geminiKey) throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel.');
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.8,maxOutputTokens:1500}})
-    });
-    if(!resp.ok) { const e=await resp.json().catch(()=>({})); throw new Error('Error API '+(e.error?.message||resp.status)); }
-    const data = await resp.json();
-    let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    text = text.replace(/```json|```/g,'').trim();
+    const text = await geminiCall(prompt, { temperature:0.8, maxOutputTokens:1500 });
     const q = JSON.parse(text);
     const aiQ = { id:Date.now(), subject:subjectId, subjectName, type:'situacional', caseText:q.caseText, text:q.text, options:q.options, correct:q.correct, feedback:q.feedback };
     STATE.quizState = { question:aiQ, answered:false, selected:null };
@@ -1620,17 +1669,7 @@ Genera UNA pregunta sobre ${s.name} con estas características OBLIGATORIAS:
 JSON válido únicamente, sin texto extra:
 {"caseText":"caso detallado 5-8 oraciones","text":"pregunta técnica","options":["A larga","B larga","C larga","D larga"],"correct":${randomCorrect},"feedback":["análisis A con norma","análisis B","análisis C","análisis D"]}`;
 
-      const geminiKey = STATE.geminiKey || DB.config.geminiKey;
-      if (!geminiKey) throw new Error('No hay API key configurada');
-      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.8,maxOutputTokens:1500}})
-      });
-      if(!resp.ok) throw new Error('HTTP '+resp.status);
-      const data = await resp.json();
-      let txt = data.candidates?.[0]?.content?.parts?.[0]?.text||'';
-      txt = txt.replace(/```json|```/g,'').trim();
+      const txt = await geminiCall(prompt, { temperature:0.8, maxOutputTokens:1500 });
       const q = JSON.parse(txt);
       questions.push({id:Date.now()+i,subject:s.id,subjectName:s.name,type:'situacional',caseText:q.caseText,text:q.text,options:q.options,correct:q.correct,feedback:q.feedback});
     } catch(err) {
@@ -1894,24 +1933,31 @@ Citas artículos específicos y jurisprudencia de Corte Constitucional (T-, C-, 
   const messages_tutor = STATE.chatHistory.slice(-10).map(m=>({ role: m.role==='ai' ? 'assistant' : 'user', content: m.text }));
 
   try {
-    const geminiKey = STATE.geminiKey || DB.config.geminiKey;
-    if (!geminiKey) throw new Error('API key de Google AI no configurada. El administrador debe configurarla.');
+    const key = STATE.geminiKey || DB.config.geminiKey;
+    if (!key) throw new Error('API key de Google AI no configurada. El administrador debe configurarla.');
     // Build Gemini messages (no system role in Gemini, include as first user turn)
     const geminiMessages = [{ role:'user', parts:[{text: SYSTEM_TUTOR + '\n\n---\nHistorial de conversación:'}] }, { role:'model', parts:[{text:'Entendido, estoy listo para ayudarte.'}] }];
     messages_tutor.forEach(m => {
       geminiMessages.push({ role: m.role === 'assistant' ? 'model' : 'user', parts:[{text: m.content}] });
     });
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:geminiMessages,generationConfig:{temperature:0.7,maxOutputTokens:1000}})
-    });
-    if(!resp.ok) {
-      const errData = await resp.json().catch(()=>({}));
-      throw new Error('Error '+resp.status+' — '+(errData.error?.message||'Verifica la API key en configuración admin'));
+    const body = JSON.stringify({ contents: geminiMessages, generationConfig:{ temperature:0.7, maxOutputTokens:1000 } });
+    let aiText = null;
+    for (const model of GEMINI_MODELS) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+      let modelFailed = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const resp = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body });
+        if (resp.status === 429) { await new Promise(r => setTimeout(r, attempt * 8000)); continue; }
+        if (resp.status === 404 || resp.status === 400) { modelFailed = true; break; }
+        if (!resp.ok) { const e = await resp.json().catch(()=>({})); throw new Error('Error '+resp.status+' — '+(e.error?.message||'Verifica la API key en configuración admin')); }
+        const data = await resp.json();
+        aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No pude generar respuesta.';
+        break;
+      }
+      if (aiText !== null) break;
+      if (!modelFailed) break; // fue 429 persistente, probar siguiente modelo
     }
-    const data = await resp.json();
-    const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No pude generar respuesta.';
+    if (aiText === null) throw new Error('Todos los modelos de IA están temporalmente saturados. Intenta en 1–2 minutos.');
     STATE.chatHistory.push({ role:'ai', text:aiText });
   } catch(err) {
     const is429 = err.message?.includes('429') || err.message?.includes('quota') || err.message?.includes('Quota');
@@ -2087,12 +2133,8 @@ async function generateAIPlan() {
   const daysLeft = Math.max(1, Math.ceil((STATE.examDate - new Date())/86400000));
   const weakSubjects = SUBJECTS.filter(s=>(STATE.subjectProgress[s.id]||50)<60).map(s=>s.name).join(', ');
   try {
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:[{parts:[{text:`Soy estudiante de derecho preparándome para el Examen de Estado de Idoneidad para Abogados en Colombia (Ley 1905/2018). Me quedan ${daysLeft} días. Mis materias más débiles son: ${weakSubjects||'todas las materias'}. Crea un plan de estudio semanal práctico, estructurado y motivador con sesiones diarias de 3-4 horas. Usa emojis, sé específico sobre qué estudiar cada día. Máximo 8 puntos concisos. Responde en español.`}]}],generationConfig:{temperature:0.7,maxOutputTokens:500}})
-    });
-    const data = await resp.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No se pudo generar el plan.';
+    const planPrompt = `Soy estudiante de derecho preparándome para el Examen de Estado de Idoneidad para Abogados en Colombia (Ley 1905/2018). Me quedan ${daysLeft} días. Mis materias más débiles son: ${weakSubjects||'todas las materias'}. Crea un plan de estudio semanal práctico, estructurado y motivador con sesiones diarias de 3-4 horas. Usa emojis, sé específico sobre qué estudiar cada día. Máximo 8 puntos concisos. Responde en español.`;
+    const text = await geminiCall(planPrompt, { temperature:0.7, maxOutputTokens:500 });
     if(resEl) resEl.innerHTML = `<div style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:14px;font-size:12px;line-height:1.9;color:var(--text-secondary)">${formatText(text).replace(/\n/g,'<br>')}</div>`;
   } catch(e) {
     if(resEl) resEl.innerHTML = `<div class="text-xs text-red">Error: ${e.message}</div>`;
@@ -2345,15 +2387,27 @@ async function testGeminiKey() {
   if (!key) { if(resEl) resEl.innerHTML = '<div class="text-xs text-red">Ingresa tu API key para probar.</div>'; return; }
   if(resEl) resEl.innerHTML = '<div class="text-xs text-muted">Probando conexión... <span class="loading-dot"></span><span class="loading-dot"></span></div>';
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:[{parts:[{text:'Responde solo: "LexPrep conectado"'}]}],generationConfig:{maxOutputTokens:20}})
-    });
-    if(!r.ok) throw new Error('Error HTTP '+r.status);
-    STATE.geminiKey = key;
-    if(resEl) resEl.innerHTML = '<div style="color:var(--green);font-size:12px">✅ ¡Conexión exitosa! API key válida. La IA está lista para usar.</div>';
+    // Probar con el primer modelo disponible
+    let connected = false;
+    for (const model of GEMINI_MODELS) {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({contents:[{parts:[{text:'Responde solo: ok'}]}],generationConfig:{maxOutputTokens:5}})
+      });
+      if (r.status === 401 || r.status === 403) { if(resEl) resEl.innerHTML='<div style="color:var(--red);font-size:12px">❌ API key inválida o sin permisos. Verifica en aistudio.google.com.</div>'; return; }
+      if (r.status === 404 || r.status === 400) continue; // probar siguiente modelo
+      if (r.status === 429) continue; // cuota agotada en este modelo, probar siguiente
+      if (r.ok) { connected = true; break; }
+    }
+    if (connected) {
+      STATE.geminiKey = key;
+      if(resEl) resEl.innerHTML = '<div style="color:var(--green);font-size:12px">✅ ¡Conexión exitosa! API key válida. La IA está lista para usar.</div>';
+    } else {
+      if(resEl) resEl.innerHTML = '<div style="color:var(--amber);font-size:12px">✅ API key válida pero la cuota por minuto está al límite. Espera 1 min y funcionará normalmente.</div>';
+      STATE.geminiKey = key;
+    }
   } catch(e) {
-    if(resEl) resEl.innerHTML = `<div style="color:var(--red);font-size:12px">❌ Error: ${e.message}. Verifica que la key sea correcta y tenga acceso a Gemini.</div>`;
+    if(resEl) resEl.innerHTML = `<div style="color:var(--red);font-size:12px">❌ Error: ${e.message}.</div>`;
   }
 }
 
@@ -2596,24 +2650,23 @@ async function testAdminKey() {
   if(!key) { if(resEl) resEl.innerHTML='<div style="color:var(--red);font-size:12px">Ingresa una API key primero.</div>'; return; }
   if(resEl) resEl.innerHTML='<div style="font-size:12px;color:var(--text-muted)">Probando conexión... <span class="loading-dot"></span><span class="loading-dot"></span></div>';
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({contents:[{parts:[{text:'Di solo: ok'}]}],generationConfig:{maxOutputTokens:5}})
-    });
-    if(r.status === 429) {
-      if(resEl) resEl.innerHTML='<div style="color:var(--amber);font-size:12px">✅ API key válida. Cuota momentáneamente agotada (límite gratuito/minuto). Espera 1 minuto y funcionará normalmente.</div>';
-      return;
+    let connected = false;
+    for (const model of GEMINI_MODELS) {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({contents:[{parts:[{text:'Di solo: ok'}]}],generationConfig:{maxOutputTokens:5}})
+      });
+      if (r.status === 401 || r.status === 403) { if(resEl) resEl.innerHTML='<div style="color:var(--red);font-size:12px">❌ API key inválida o sin permisos. Verifica que sea de aistudio.google.com.</div>'; return; }
+      if (r.status === 404 || r.status === 400) continue;
+      if (r.status === 429) continue;
+      if (!r.ok) { const err = await r.json().catch(()=>({})); if(resEl) resEl.innerHTML=`<div style="color:var(--red);font-size:12px">❌ Error ${r.status}: ${err.error?.message||'desconocido'}</div>`; return; }
+      connected = true; break;
     }
-    if(r.status === 401 || r.status === 403) {
-      if(resEl) resEl.innerHTML='<div style="color:var(--red);font-size:12px">❌ API key inválida o sin permisos. Verifica que sea de aistudio.google.com.</div>';
-      return;
+    if (connected) {
+      if(resEl) resEl.innerHTML='<div style="color:var(--green);font-size:12px">✅ API key válida — Google Gemini conectado correctamente.</div>';
+    } else {
+      if(resEl) resEl.innerHTML='<div style="color:var(--amber);font-size:12px">✅ API key válida. Cuota por minuto momentáneamente al límite — espera 1 min y funcionará con normalidad.</div>';
     }
-    if(!r.ok) {
-      const err = await r.json().catch(()=>({}));
-      if(resEl) resEl.innerHTML=`<div style="color:var(--red);font-size:12px">❌ Error ${r.status}: ${err.error?.message||'desconocido'}</div>`;
-      return;
-    }
-    if(resEl) resEl.innerHTML='<div style="color:var(--green);font-size:12px">✅ API key válida — Google Gemini conectado correctamente.</div>';
   } catch(e) {
     if(resEl) resEl.innerHTML=`<div style="color:var(--red);font-size:12px">❌ Error de red: ${e.message}</div>`;
   }
