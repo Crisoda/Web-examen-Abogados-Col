@@ -966,11 +966,39 @@ const GEMINI_ENDPOINTS = [
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
 ];
 
+// Extractor robusto de JSON — basado en extraer_json() del servidor.py
+// Maneja: bloques markdown, JSON truncado, comas colgantes, strings sin cerrar
+function extraerJSON(texto) {
+  texto = texto.replace(/```json\s*/g, '').replace(/```/g, '').trim();
+  try { return JSON.parse(texto); } catch(_) {}
+  const ini = texto.indexOf('{');
+  const fin = texto.lastIndexOf('}');
+  if (ini !== -1 && fin !== -1 && fin > ini) {
+    let bloque = texto.slice(ini, fin + 1);
+    try { return JSON.parse(bloque); } catch(_) {}
+    bloque = bloque.replace(/,\s*([}\]])/g, '$1');
+    try { return JSON.parse(bloque); } catch(_) {}
+  }
+  if (ini !== -1) {
+    let bloque = texto.slice(ini).replace(/,\s*([}\]])/g, '$1').trimEnd();
+    const comillas = (bloque.match(/(?<!\\)"/g) || []).length;
+    if (comillas % 2 !== 0) bloque = bloque.replace(/,?\s*$/, '') + '"';
+    bloque = bloque.replace(/,\s*$/, '');
+    const abreLL = (bloque.match(/{/g)||[]).length - (bloque.match(/}/g)||[]).length;
+    const abreCO = (bloque.match(/\[/g)||[]).length - (bloque.match(/\]/g)||[]).length;
+    bloque += ']'.repeat(Math.max(0, abreCO)) + '}'.repeat(Math.max(0, abreLL));
+    try { return JSON.parse(bloque); } catch(_) {}
+    bloque = bloque.replace(/,\s*([}\]])/g, '$1');
+    try { return JSON.parse(bloque); } catch(_) {}
+  }
+  throw new Error('No se encontró JSON válido en la respuesta de la IA');
+}
+
 async function geminiCall(prompt, genConfig = {}) {
   const key = STATE.geminiKey || DB.config.geminiKey;
   if (!key) throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel.');
 
-  const cfg = { temperature: 0.8, maxOutputTokens: 1500, ...genConfig };
+  const cfg = { temperature: 0.8, maxOutputTokens: 8192, ...genConfig };
   const body = JSON.stringify({ contents:[{ parts:[{ text: prompt }] }], generationConfig: cfg });
 
   let lastError = 'Sin respuesta';
@@ -1473,8 +1501,8 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional, sin markdown, sin ba
   ]
 }`;
 
-    const text = await geminiCall(prompt, { temperature:0.8, maxOutputTokens:1500 });
-    const q = JSON.parse(text);
+    const text = await geminiCall(prompt, { temperature:0.8, maxOutputTokens:8192 });
+    const q = extraerJSON(text);
     // Rotar opciones en JS para garantizar posición aleatoria real
     const shuffled = shuffleOptions(q.options, q.feedback);
     const aiQ = { id:Date.now(), subject:subjectId, subjectName, type:'situacional', caseText:q.caseText, text:q.text, options:shuffled.options, correct:shuffled.correct, feedback:shuffled.feedback };
@@ -1682,8 +1710,8 @@ Genera UNA pregunta sobre ${s.name} con estas características OBLIGATORIAS:
 JSON válido únicamente, sin texto extra:
 {"caseText":"caso detallado 5-8 oraciones","text":"pregunta técnica","options":["OPCIÓN CORRECTA aquí (índice 0)","Distractor B","Distractor C","Distractor D"],"correct":0,"feedback":["análisis índice 0 CORRECTO con norma","análisis índice 1 incorrecto","análisis índice 2 incorrecto","análisis índice 3 incorrecto"]}`;
 
-      const txt = await geminiCall(prompt, { temperature:0.8, maxOutputTokens:1500 });
-      const q = JSON.parse(txt);
+      const txt = await geminiCall(prompt, { temperature:0.8, maxOutputTokens:8192 });
+      const q = extraerJSON(txt);
       // Rotar en JS para posición aleatoria real
       const shuffled = shuffleOptions(q.options, q.feedback);
       questions.push({id:Date.now()+i,subject:s.id,subjectName:s.name,type:'situacional',caseText:q.caseText,text:q.text,options:shuffled.options,correct:shuffled.correct,feedback:shuffled.feedback});
@@ -1955,7 +1983,7 @@ Citas artículos específicos y jurisprudencia de Corte Constitucional (T-, C-, 
     messages_tutor.forEach(m => {
       geminiMessages.push({ role: m.role === 'assistant' ? 'model' : 'user', parts:[{text: m.content}] });
     });
-    const body = JSON.stringify({ contents: geminiMessages, generationConfig:{ temperature:0.7, maxOutputTokens:1000 } });
+    const body = JSON.stringify({ contents: geminiMessages, generationConfig:{ temperature:0.7, maxOutputTokens:4096 } });
     let aiText = null;
     for (const baseUrl of GEMINI_ENDPOINTS) {
       const url = `${baseUrl}?key=${key}`;
@@ -2149,7 +2177,7 @@ async function generateAIPlan() {
   const weakSubjects = SUBJECTS.filter(s=>(STATE.subjectProgress[s.id]||50)<60).map(s=>s.name).join(', ');
   try {
     const planPrompt = `Soy estudiante de derecho preparándome para el Examen de Estado de Idoneidad para Abogados en Colombia (Ley 1905/2018). Me quedan ${daysLeft} días. Mis materias más débiles son: ${weakSubjects||'todas las materias'}. Crea un plan de estudio semanal práctico, estructurado y motivador con sesiones diarias de 3-4 horas. Usa emojis, sé específico sobre qué estudiar cada día. Máximo 8 puntos concisos. Responde en español.`;
-    const text = await geminiCall(planPrompt, { temperature:0.7, maxOutputTokens:500 });
+    const text = await geminiCall(planPrompt, { temperature:0.7, maxOutputTokens:2048 });
     if(resEl) resEl.innerHTML = `<div style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:14px;font-size:12px;line-height:1.9;color:var(--text-secondary)">${formatText(text).replace(/\n/g,'<br>')}</div>`;
   } catch(e) {
     if(resEl) resEl.innerHTML = `<div class="text-xs text-red">Error: ${e.message}</div>`;
