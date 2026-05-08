@@ -565,6 +565,46 @@ a{color:inherit;text-decoration:none}
 }
 /* Touch scroll */
 .chat-messages,.sidebar,.sim-questions{-webkit-overflow-scrolling:touch}
+
+/* ================================================
+   PREGUNTADOS — Ruleta de Materias
+   ================================================ */
+.preguntados-wheel{position:relative;width:320px;height:320px;margin:0 auto}
+.wheel-svg{width:100%;height:100%;transform-origin:center;transition:transform 3s cubic-bezier(.17,.67,.12,1)}
+.wheel-pointer{position:absolute;top:-14px;left:50%;transform:translateX(-50%);font-size:28px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.6));z-index:10}
+.pq-category-btn{
+  display:flex;align-items:center;gap:10px;background:var(--bg-elevated);
+  border:1.5px solid rgba(255,255,255,.08);border-radius:10px;
+  padding:11px 14px;cursor:pointer;text-align:left;color:var(--text-primary);
+  font-size:13px;width:100%;min-height:44px;
+  transition:border-color .12s var(--ease),background .12s var(--ease);
+}
+.pq-category-btn:hover{border-color:var(--gold-border);background:var(--gold-dim)}
+.pq-option{
+  display:flex;align-items:flex-start;gap:10px;background:var(--bg-elevated);
+  border:2px solid rgba(255,255,255,.08);border-radius:10px;
+  padding:12px 14px;cursor:pointer;text-align:left;width:100%;
+  font-size:14px;line-height:1.6;color:var(--text-primary);min-height:48px;
+  transition:border-color .15s var(--ease),background .15s var(--ease);
+}
+.pq-option:hover:not(:disabled){border-color:var(--gold-border);background:rgba(201,168,76,.07)}
+.pq-option.correct{border-color:var(--green);background:var(--green-dim)}
+.pq-option.incorrect{border-color:var(--red);background:var(--red-dim)}
+.pq-option.reveal{border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.05)}
+.pq-option:disabled{cursor:default}
+.pq-score-ring{
+  width:80px;height:80px;border-radius:50%;
+  border:4px solid var(--gold-border);
+  display:flex;align-items:center;justify-content:center;flex-direction:column;
+  background:var(--bg-elevated);
+}
+.reto-code{
+  background:var(--bg-elevated);border:2px dashed var(--gold-border);
+  border-radius:10px;padding:14px 20px;text-align:center;
+  font-family:'DM Mono',monospace;font-size:18px;letter-spacing:.15em;color:var(--gold);
+  cursor:pointer;user-select:all;
+}
+.reto-code:hover{background:var(--gold-dim)}
 </style>
 </head>
 <body>
@@ -696,6 +736,7 @@ a{color:inherit;text-decoration:none}
         <button class="nav-item" data-page="flashcards"><span class="nav-icon">▣</span> Flashcards Jurídicas</button>
         <button class="nav-item" data-page="planner"><span class="nav-icon">▤</span> Plan de Estudio</button>
         <button class="nav-item" data-page="gamification"><span class="nav-icon">◆</span> Logros y Ranking</button>
+        <button class="nav-item" data-page="preguntados"><span class="nav-icon">🎯</span> Preguntados Jurídicos</button>
         <button class="nav-item" data-page="analytics"><span class="nav-icon">▲</span> Mi Análisis</button>
       </div>
       <div class="nav-section">
@@ -722,6 +763,7 @@ a{color:inherit;text-decoration:none}
             <span class="streak-label">días racha</span>
           </div>
           <div class="xp-chip" id="header-xp">0 XP</div>
+          <div id="sync-indicator" title="Sincronizado con la nube" style="font-size:10px;color:var(--green);opacity:0.7;display:none">☁ Sync</div>
         </div>
       </div>
       <div id="page-dashboard"></div>
@@ -733,6 +775,7 @@ a{color:inherit;text-decoration:none}
       <div id="page-gamification" class="hidden"></div>
       <div id="page-analytics" class="hidden"></div>
       <div id="page-settings" class="hidden"></div>
+      <div id="page-preguntados" class="hidden"></div>
     </main>
   </div>
 </div>
@@ -800,8 +843,8 @@ let simTimer=null;
 // ============================================================
 // SESSION PERSISTENCE (localStorage)
 // ============================================================
-const SESSION_KEY='lp_session_v2';
-const SESSION_TTL=30*60*1000;
+const SESSION_KEY='lp_session_v3';
+const SESSION_TTL=7*24*60*60*1000; // 7 días — persiste entre cierres de navegador
 let inactivityTimer=null, inactivityWarnTimer=null;
 
 function saveSession(){
@@ -811,7 +854,10 @@ function saveSession(){
     xp:STATE.xp, streak:STATE.streak, totalQuestions:STATE.totalQuestions,
     correctAnswers:STATE.correctAnswers, subjectProgress:STATE.subjectProgress,
     simResults:STATE.simResults, examDate:STATE.examDate.toISOString(),
-    quizHistory:STATE.quizHistory, ts:Date.now()
+    quizHistory:STATE.quizHistory,
+    geminiKey:STATE.geminiKey||DB.config.geminiKey||'',
+    binId:JSONBIN.BIN_ID, binApiKey:JSONBIN.API_KEY,
+    ts:Date.now()
   }));
 }
 function clearSession(){ localStorage.removeItem(SESSION_KEY); }
@@ -821,6 +867,18 @@ function loadSession(){
     if(!raw)return null;
     const s=JSON.parse(raw);
     if(Date.now()-s.ts>SESSION_TTL){clearSession();return null;}
+    // Bootstrap JSONBin credentials from saved session (cross-device)
+    if(s.binId&&s.binId!=='TU_BIN_ID_AQUI'){
+      JSONBIN.BIN_ID=s.binId;localStorage.setItem('lp_bin',s.binId);
+    }
+    if(s.binApiKey&&s.binApiKey!=='TU_API_KEY_AQUI'){
+      JSONBIN.API_KEY=s.binApiKey;localStorage.setItem('lp_key',s.binApiKey);
+    }
+    // Bootstrap Gemini key from saved session (avoids "not configured" error)
+    if(s.geminiKey&&!STATE.geminiKey){
+      STATE.geminiKey=s.geminiKey;
+      DB.config.geminiKey=s.geminiKey;
+    }
     return s;
   }catch{return null;}
 }
@@ -829,19 +887,10 @@ function resetInactivityTimer(){
   document.getElementById('inactivity-warn')?.remove();
   if(!STATE.currentUser&&!STATE.isAdmin)return;
   saveSession();
+  // Auto-save every 5 min of activity — no forced logout
   inactivityWarnTimer=setTimeout(()=>{
-    if(!STATE.currentUser&&!STATE.isAdmin)return;
-    const w=document.createElement('div');w.id='inactivity-warn';
-    w.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg-elevated);border:1px solid var(--gold-border);border-radius:12px;padding:13px 20px;font-size:13px;color:var(--gold);z-index:9999;display:flex;align-items:center;gap:12px;box-shadow:0 8px 32px rgba(0,0,0,.4)';
-    const btn=document.createElement('button');btn.style.cssText='background:var(--gold);border:none;border-radius:6px;padding:4px 11px;font-size:12px;font-weight:600;color:#1a1000;cursor:pointer';
-    btn.textContent='Continuar';btn.onclick=resetInactivityTimer;
-    w.innerHTML='Tu sesión expirará en 5 minutos por inactividad. ';
-    w.appendChild(btn);document.body.appendChild(w);
-  },SESSION_TTL-5*60*1000);
-  inactivityTimer=setTimeout(()=>{
-    clearSession();document.getElementById('inactivity-warn')?.remove();
-    alert('Tu sesión expiró por inactividad. Por favor inicia sesión de nuevo.');doLogout();
-  },SESSION_TTL);
+    saveSession();saveUserProgress();
+  },5*60*1000);
 }
 ['mousemove','keydown','click','touchstart','scroll'].forEach(e=>
   document.addEventListener(e,resetInactivityTimer,{passive:true}));
@@ -942,7 +991,11 @@ async function dbSave(){
         body:JSON.stringify(payload)
       });
       if(!r.ok)console.warn('[LexPrep] JSONBin save HTTP',r.status);
-      else console.log('[LexPrep] DB saved to JSONBin.');
+      else{
+        console.log('[LexPrep] DB saved to JSONBin.');
+        const si=document.getElementById('sync-indicator');
+        if(si){si.style.display='block';si.textContent='☁ Sync OK';si.style.color='var(--green)';setTimeout(()=>{si.style.display='none';},3000);}
+      }
     }catch(e){
       console.warn('[LexPrep] JSONBin save error:',e.message);
     }
@@ -960,6 +1013,8 @@ function saveUserProgress(){
   u.correctQ=STATE.correctAnswers||0;
   u.progress=calcOverallProgress();
   u.subjectProgress={...STATE.subjectProgress};
+  if(STATE.simResults&&STATE.simResults.length)u.simResults=STATE.simResults;
+  if(STATE.quizHistory&&STATE.quizHistory.length)u.quizHistory=STATE.quizHistory.slice(-50);
   // Update STATE.currentUser reference too so UI is consistent
   STATE.currentUser.xp=u.xp;
   STATE.currentUser.streak=u.streak;
@@ -967,8 +1022,8 @@ function saveUserProgress(){
   STATE.currentUser.correctQ=u.correctQ;
   STATE.currentUser.progress=u.progress;
   STATE.currentUser.subjectProgress=u.subjectProgress;
-  dbSave();
-  saveSession();
+  dbSave(); // saves to JSONBin — async, non-blocking
+  saveSession(); // saves to localStorage immediately
 }
 
 function calcOverallProgress(){
@@ -1355,7 +1410,8 @@ function closeMobileMenu(){document.getElementById('sidebar')?.classList.remove(
 function renderPage(page,el){
   ({dashboard:renderDashboard,quiz:renderQuiz,simulator:renderSimulator,
     tutor:renderTutor,flashcards:renderFlashcards,planner:renderPlanner,
-    gamification:renderGamification,analytics:renderAnalytics,settings:renderSettings}[page]||((e)=>{}))(el);
+    gamification:renderGamification,analytics:renderAnalytics,settings:renderSettings,
+    preguntados:renderPreguntados}[page]||((e)=>{}))(el);
 }
 
 // ============================================================
@@ -1447,8 +1503,9 @@ function renderDashboard(el){
           <div class="section-title">Acceso rápido</div>
           <div style="display:flex;flex-direction:column;gap:7px">
             <button data-nav="quiz" style="background:var(--gold-dim);border:1px solid var(--gold-border);border-radius:10px;padding:11px 14px;text-align:left;cursor:pointer;color:var(--gold);font-size:13px;font-weight:500;width:100%">Resolver preguntas de práctica</button>
-            <button data-nav="simulator" style="background:var(--blue-dim);border:1px solid rgba(59,130,246,.3);border-radius:10px;padding:11px 14px;text-align:left;cursor:pointer;color:var(--blue-jur);font-size:13px;font-weight:500;width:100%">Iniciar simulacro (10 preguntas IA)</button>
+            <button data-nav="simulator" style="background:var(--blue-dim);border:1px solid rgba(59,130,246,.3);border-radius:10px;padding:11px 14px;text-align:left;cursor:pointer;color:var(--blue-jur);font-size:13px;font-weight:500;width:100%">Iniciar simulacro multi-materia (10 preguntas IA)</button>
             <button data-nav="tutor" style="background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.3);border-radius:10px;padding:11px 14px;text-align:left;cursor:pointer;color:var(--purple);font-size:13px;font-weight:500;width:100%">Consultar al Tutor Jurídico IA</button>
+            <button data-nav="preguntados" style="background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:11px 14px;text-align:left;cursor:pointer;color:var(--amber);font-size:13px;font-weight:500;width:100%">🎯 Jugar Preguntados Jurídicos</button>
           </div>
         </div>
       </div>
@@ -1750,13 +1807,13 @@ function renderSimulator(el){
   <div class="page-body" style="max-width:680px;margin:0 auto">
     <div class="card card-gold" style="text-align:center;padding:44px 36px;margin-bottom:18px">
       <div class="font-serif text-xl font-700 mb-3">Simulacro Completo · Examen de Estado</div>
-      <div class="text-secondary mb-5" style="line-height:1.7">La IA generará 10 preguntas agrupadas en casos jurídicos extensos, replicando el formato real del Examen de Idoneidad. Sin retroalimentación durante el examen.</div>
+      <div class="text-secondary mb-5" style="line-height:1.7">La IA genera <strong style="color:var(--gold)">10 preguntas de materias variadas</strong> (Constitucional, Penal, Laboral, Civil, Ética y más), formato real del Examen de Idoneidad Ley 1905/2018. Sin retroalimentación durante el examen.</div>
       <div class="grid-3 mb-5">
         <div style="background:var(--bg-elevated);border-radius:10px;padding:14px"><div class="font-serif text-gold" style="font-size:24px;font-weight:700">10</div><div class="text-xs text-muted">Preguntas</div></div>
         <div style="background:var(--bg-elevated);border-radius:10px;padding:14px"><div class="font-serif" style="font-size:24px;font-weight:700;color:var(--blue-jur)">2h 45m</div><div class="text-xs text-muted">Tiempo límite</div></div>
         <div style="background:var(--bg-elevated);border-radius:10px;padding:14px"><div class="font-serif" style="font-size:24px;font-weight:700;color:var(--green)">60%</div><div class="text-xs text-muted">Para aprobar</div></div>
       </div>
-      <button id="btn-start-sim" class="btn-primary" style="width:auto;padding:13px 36px;font-size:15px">Iniciar simulacro →</button>
+      <button id="btn-start-sim" class="btn-primary" style="width:auto;padding:13px 36px;font-size:15px">Iniciar simulacro multi-materia →</button>
     </div>
     <div class="grid-2">
       <div class="card">
@@ -2280,6 +2337,7 @@ function renderGamification(el){
   <div class="page-header">
     <div class="page-title">Logros y Ranking</div>
     <div class="page-subtitle">Compite, aprende y escala posiciones</div>
+    <button class="btn-ghost" data-nav="preguntados" style="margin-top:6px">🎯 Jugar Preguntados →</button>
   </div>
   <div class="page-body">
     <div class="grid-2 mb-6">
@@ -2433,7 +2491,7 @@ function renderSettings(el){
   document.getElementById('btn-change-pass')?.addEventListener('click',changePassword);
   document.getElementById('btn-reset-progress')?.addEventListener('click',()=>{if(confirm('¿Resetear todo tu progreso? Esta acción no se puede deshacer.'))resetProgress();});
 }
-function saveSettings(){
+async function saveSettings(){
   const name=document.getElementById('set-name')?.value?.trim();
   const uni=document.getElementById('set-uni')?.value?.trim();
   const date=document.getElementById('set-date')?.value;
@@ -2442,9 +2500,13 @@ function saveSettings(){
   if(date)STATE.examDate=new Date(date);
   const u=DB.users.find(u=>u.id===STATE.currentUser?.id);
   if(u){if(name)u.name=name;if(uni)u.uni=uni;if(date)u.examDate=date;}
+  const btn=document.getElementById('btn-save-settings');
+  if(btn){btn.textContent='Guardando…';btn.disabled=true;}
   saveUserProgress();
+  await new Promise(r=>setTimeout(r,800)); // let dbSave fire
+  if(btn){btn.textContent='✓ Guardado en la nube';btn.disabled=false;}
   document.getElementById('user-name-sidebar').textContent=(name||STATE.currentUser?.name||'').split(' ').slice(0,2).join(' ');
-  alert('Cambios guardados correctamente.');
+  setTimeout(()=>{if(btn)btn.textContent='Guardar cambios';},3000);
 }
 async function changePassword(){
   const oldP=document.getElementById('set-pass-old')?.value;
@@ -2759,6 +2821,423 @@ async function removeCustomSubject(idx){
   await dbSave();renderAdminContent(document.getElementById('admin-page-content'));
 }
 
+
+// ============================================================
+// PREGUNTADOS JURÍDICOS — Modo multijugador por categorías
+// ============================================================
+const PQ_STATE = {
+  mode: 'menu',       // 'menu' | 'spin' | 'question' | 'results' | 'challenge'
+  category: null,
+  question: null,
+  answered: false,
+  selected: null,
+  scores: {solo: {correct:0, total:0}, challenger: {correct:0, total:0}},
+  round: 0,
+  maxRounds: 6,
+  spinning: false,
+  retoCode: null,
+  opponentName: null,
+  sharedResults: [],
+};
+
+const PQ_COLORS = [
+  '#C9A84C','#3B82F6','#8B5CF6','#F59E0B','#10B981','#EF4444',
+  '#EC4899','#06B6D4','#6366F1','#84CC16'
+];
+
+function renderPreguntados(el){
+  if(PQ_STATE.mode==='question') return renderPQQuestion(el);
+  if(PQ_STATE.mode==='results') return renderPQResults(el);
+  if(PQ_STATE.mode==='challenge') return renderPQChallenge(el);
+  renderPQMenu(el);
+}
+
+function renderPQMenu(el){
+  PQ_STATE.mode='menu';
+  const cats = SUBJECTS.slice(0,10);
+  const pendingReto = localStorage.getItem('pq_reto_pending');
+  
+  el.innerHTML = `
+  <div class="page-header">
+    <div>
+      <div class="page-title">🎯 Preguntados Jurídicos</div>
+      <div class="page-subtitle">Gira la ruleta · Responde por materia · Reta a otros estudiantes</div>
+    </div>
+  </div>
+  <div class="page-body">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:900px;margin:0 auto">
+      <!-- RULETA -->
+      <div>
+        <div class="section-title" style="text-align:center;margin-bottom:12px">Gira y responde</div>
+        <div class="card card-gold" style="text-align:center;padding:28px 20px">
+          <div class="preguntados-wheel" id="pq-wheel-container">
+            <div class="wheel-pointer">▼</div>
+            ${buildWheelSVG(cats)}
+          </div>
+          <div style="margin-top:14px;font-size:13px;color:var(--text-muted)" id="pq-spin-label">Presiona para girar</div>
+          <button id="btn-pq-spin" style="margin-top:12px;background:linear-gradient(135deg,var(--gold),var(--gold-light));border:none;border-radius:8px;padding:11px 28px;font-size:14px;font-weight:600;color:#1a1000;cursor:pointer;min-height:44px">
+            🎲 ¡Girar!
+          </button>
+        </div>
+        <div style="margin-top:14px" class="card">
+          <div class="card-title">Mi marcador</div>
+          <div style="display:flex;align-items:center;gap:16px">
+            <div class="pq-score-ring">
+              <div style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:var(--gold)">${PQ_STATE.scores.solo.correct}</div>
+              <div style="font-size:10px;color:var(--text-muted)">${PQ_STATE.scores.solo.total} jugadas</div>
+            </div>
+            <div style="flex:1">
+              <div style="font-size:13px;color:var(--text-secondary);margin-bottom:4px">Precisión</div>
+              <div style="font-family:'Playfair Display',serif;font-size:24px;font-weight:700;color:var(--green)">
+                ${PQ_STATE.scores.solo.total ? Math.round((PQ_STATE.scores.solo.correct/PQ_STATE.scores.solo.total)*100) : 0}%
+              </div>
+              <div class="progress-bar" style="height:6px;margin-top:6px">
+                <div class="progress-fill gold" style="width:${PQ_STATE.scores.solo.total ? Math.round((PQ_STATE.scores.solo.correct/PQ_STATE.scores.solo.total)*100) : 0}%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- PANEL RETOS -->
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="section-title">Retar a otro estudiante</div>
+        <div class="card card-gold">
+          <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;line-height:1.6">
+            Genera un código de reto. Cualquier usuario de LexPrep puede aceptarlo e intentar superar tu puntaje.
+          </div>
+          <button id="btn-pq-crear-reto" style="width:100%;background:linear-gradient(135deg,var(--gold),var(--gold-light));border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:600;color:#1a1000;cursor:pointer;margin-bottom:10px">
+            ⚔️ Crear reto
+          </button>
+          ${PQ_STATE.retoCode ? `
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">Código activo — compártelo:</div>
+          <div class="reto-code" id="pq-reto-code-display" title="Clic para copiar">${PQ_STATE.retoCode}</div>
+          <div id="pq-copy-confirm" style="font-size:11px;color:var(--green);text-align:center;margin-top:4px;display:none">¡Copiado!</div>
+          ` : ''}
+        </div>
+        
+        <div class="card">
+          <div class="card-title" style="margin-bottom:10px">Aceptar reto de un amigo</div>
+          <div style="display:flex;gap:8px">
+            <input id="pq-reto-input" class="form-input" type="text" placeholder="Código ej: CONST-7842" style="flex:1;text-transform:uppercase;letter-spacing:.1em;font-family:'DM Mono',monospace"/>
+            <button id="btn-pq-aceptar-reto" style="background:var(--blue-dim);border:1px solid rgba(59,130,246,.3);border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;color:var(--blue-jur);cursor:pointer;white-space:nowrap">
+              Unirse
+            </button>
+          </div>
+          <div id="pq-reto-error" style="font-size:12px;color:var(--red);margin-top:6px;display:none"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom:10px">Elegir materia directamente</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            ${cats.slice(0,6).map((s,i) => `
+            <button class="pq-category-btn" data-catid="${s.id}" data-catname="${s.name}" style="border-color:${PQ_COLORS[i]}22">
+              <span style="width:10px;height:10px;border-radius:50%;background:${PQ_COLORS[i]};flex-shrink:0;display:inline-block"></span>
+              <span>${s.name}</span>
+            </button>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+  // Wheel spin
+  document.getElementById('btn-pq-spin')?.addEventListener('click', ()=>spinWheel(cats));
+  
+  // Create reto
+  document.getElementById('btn-pq-crear-reto')?.addEventListener('click', crearReto);
+  
+  // Copy code
+  document.getElementById('pq-reto-code-display')?.addEventListener('click', ()=>{
+    navigator.clipboard.writeText(PQ_STATE.retoCode||'').catch(()=>{});
+    const c = document.getElementById('pq-copy-confirm');
+    if(c){c.style.display='block';setTimeout(()=>c.style.display='none',2000);}
+  });
+  
+  // Accept reto
+  document.getElementById('btn-pq-aceptar-reto')?.addEventListener('click', aceptarReto);
+  document.getElementById('pq-reto-input')?.addEventListener('keydown', e=>{if(e.key==='Enter')aceptarReto();});
+  
+  // Direct category buttons
+  el.querySelectorAll('[data-catid]').forEach(b => b.addEventListener('click', ()=>{
+    const cat = SUBJECTS.find(s=>s.id===b.dataset.catid);
+    if(cat) startPQRound(cat);
+  }));
+}
+
+function buildWheelSVG(cats){
+  const n = cats.length;
+  const cx = 160, cy = 160, r = 155, ir = 32;
+  const angle = (2 * Math.PI) / n;
+  let paths = '';
+  let labels = '';
+  cats.forEach((s, i) => {
+    const a0 = i * angle - Math.PI/2;
+    const a1 = a0 + angle;
+    const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+    const xi0 = cx + ir * Math.cos(a0), yi0 = cy + ir * Math.sin(a0);
+    const xi1 = cx + ir * Math.cos(a1), yi1 = cy + ir * Math.sin(a1);
+    const lf = angle > Math.PI ? 1 : 0;
+    paths += `<path d="M${xi0},${yi0} L${x0},${y0} A${r},${r} 0 ${lf},1 ${x1},${y1} L${xi1},${yi1} A${ir},${ir} 0 ${lf},0 ${xi0},${yi0}Z" fill="${PQ_COLORS[i%PQ_COLORS.length]}" stroke="#0D1117" stroke-width="2" opacity="0.88"/>`;
+    const am = a0 + angle/2;
+    const lx = cx + (r*0.62) * Math.cos(am);
+    const ly = cy + (r*0.62) * Math.sin(am);
+    const abbr = s.name.replace('Derecho ','').replace('Ética del Abogado','Ética').replace('Hermenéutica Jurídica','Hermenéut.').slice(0,9);
+    const rot = (am * 180/Math.PI) + 90;
+    labels += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" font-family="DM Sans,sans-serif" font-size="10" font-weight="600" fill="#fff" transform="rotate(${rot},${lx},${ly})" opacity="0.95">${abbr}</text>`;
+  });
+  return `<svg id="pq-wheel-svg" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="160" cy="160" r="157" fill="#161E2E" stroke="#C9A84C" stroke-width="2" opacity="0.4"/>
+    ${paths}${labels}
+    <circle cx="160" cy="160" r="30" fill="#0D1117" stroke="#C9A84C" stroke-width="2"/>
+    <text x="160" y="165" text-anchor="middle" font-family="Playfair Display,serif" font-size="13" font-weight="700" fill="#C9A84C">LEX</text>
+  </svg>`;
+}
+
+function spinWheel(cats){
+  if(PQ_STATE.spinning) return;
+  PQ_STATE.spinning = true;
+  const btn = document.getElementById('btn-pq-spin');
+  const lbl = document.getElementById('pq-spin-label');
+  if(btn) btn.disabled = true;
+  if(lbl) lbl.textContent = 'Girando…';
+  const svg = document.getElementById('pq-wheel-svg');
+  if(!svg) return;
+  const n = cats.length;
+  const idx = Math.floor(Math.random() * n);
+  const segment = 360/n;
+  // We want idx segment to end up at top (pointer at 270deg = -90deg)
+  const baseSpins = 5 + Math.random()*3;
+  const targetAngle = 360*baseSpins + (360 - (idx * segment + segment/2));
+  svg.style.transition = 'transform 3s cubic-bezier(.17,.67,.12,1)';
+  svg.style.transform = `rotate(${targetAngle}deg)`;
+  setTimeout(()=>{
+    PQ_STATE.spinning = false;
+    const cat = cats[idx];
+    if(lbl) lbl.textContent = `¡${cat.name}!`;
+    if(btn) btn.disabled = false;
+    setTimeout(()=> startPQRound(cat), 700);
+  }, 3200);
+}
+
+async function startPQRound(cat){
+  PQ_STATE.category = cat;
+  PQ_STATE.answered = false;
+  PQ_STATE.selected = null;
+  PQ_STATE.mode = 'question';
+  PQ_STATE.question = null;
+  const el = document.getElementById('page-preguntados');
+  if(!el) return;
+  el.innerHTML = `
+  <div class="page-header"><div class="page-title">🎯 ${cat.name}</div><div class="page-subtitle">Generando pregunta con IA…</div></div>
+  <div class="page-body" style="max-width:680px;margin:0 auto;text-align:center">
+    <div class="card card-gold" style="padding:56px 36px">
+      <div class="font-serif text-xl font-700 mb-3" style="color:var(--gold)">${cat.name}</div>
+      <div class="text-secondary mb-4">La IA está preparando tu pregunta…</div>
+      <div><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>
+    </div>
+  </div>`;
+  try{
+    const prompt = `Eres un examinador experto del Examen de Idoneidad para Abogados de Colombia (Ley 1905/2018).
+
+Genera UNA pregunta de opción múltiple sobre ${cat.name} para el juego "Preguntados Jurídico".
+
+Requisitos:
+- Pregunta corta y directa (1-3 oraciones máximo) — apta para juego de preguntas
+- 4 opciones (A, B, C, D), solo 1 correcta
+- Las opciones incorrectas deben ser plausibles (no obvias)
+- Dificultad media-alta (examen de Estado)
+- Retroalimentación breve (1-2 oraciones) para cada opción
+
+Responde SOLO con JSON válido, sin texto adicional:
+{
+  "question": "texto de la pregunta",
+  "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
+  "correct": 0,
+  "feedback": ["feedback A","feedback B","feedback C","feedback D"],
+  "fact": "dato curioso o norma clave relacionada (1 oración)"
+}`;
+    const raw = await geminiCall(prompt, {temperature:0.9, maxOutputTokens:1500});
+    const data = extraerJSON(raw);
+    if(!data?.question || !Array.isArray(data.options) || data.options.length<4) throw new Error('Formato inválido');
+    PQ_STATE.question = data;
+    renderPQQuestion(el);
+  } catch(e) {
+    el.innerHTML = `
+    <div class="page-header"><div class="page-title">Error</div></div>
+    <div class="page-body" style="max-width:580px;margin:0 auto">
+      <div class="card">
+        <div style="color:var(--red);margin-bottom:10px">Error al generar pregunta: ${e.message}</div>
+        <button id="btn-pq-retry" class="btn-primary" style="width:auto;padding:9px 20px">Reintentar</button>
+        <button id="btn-pq-back" class="btn-ghost" style="margin-left:8px">Volver al menú</button>
+      </div>
+    </div>`;
+    document.getElementById('btn-pq-retry')?.addEventListener('click',()=>startPQRound(cat));
+    document.getElementById('btn-pq-back')?.addEventListener('click',()=>{ PQ_STATE.mode='menu'; renderPQMenu(el); });
+  }
+}
+
+function renderPQQuestion(el){
+  if(!PQ_STATE.question) return;
+  const q = PQ_STATE.question;
+  const cat = PQ_STATE.category;
+  const {answered, selected} = PQ_STATE;
+  const score = PQ_STATE.scores.solo;
+  
+  el.innerHTML = `
+  <div class="page-header">
+    <div>
+      <div class="page-title">🎯 Preguntados</div>
+      <div class="page-subtitle">${cat.name} · ${score.correct}/${score.total} correctas esta sesión</div>
+    </div>
+    <button id="btn-pq-back-menu" class="btn-ghost">← Menú</button>
+  </div>
+  <div class="page-body" style="max-width:700px;margin:0 auto">
+    <div class="card card-gold" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <span style="background:${cat.color||'var(--gold)'};color:#1a1000;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700">${cat.name}</span>
+        <span style="font-size:12px;color:var(--text-muted)">Preguntados Jurídicos</span>
+      </div>
+      <div style="font-size:16px;line-height:1.7;font-weight:500;margin-bottom:18px">${q.question}</div>
+      <div class="options-list">
+        ${q.options.map((opt,i) => {
+          let cls = 'pq-option';
+          if(answered){
+            if(i===q.correct) cls += ' correct';
+            else if(i===selected && i!==q.correct) cls += ' incorrect';
+          }
+          return `<button class="${cls}" data-pqi="${i}" ${answered?'disabled':''}>
+            <span class="option-letter" style="background:${answered&&i===q.correct?'var(--green)':answered&&i===selected?'var(--red)':'rgba(255,255,255,.08)'}">
+              ${['A','B','C','D'][i]}
+            </span>
+            <span>${opt}</span>
+          </button>`;
+        }).join('')}
+      </div>
+      ${answered ? `
+      <div class="feedback-box ${selected===q.correct?'correct-feedback':'incorrect-feedback'}" style="margin-top:16px">
+        <div style="font-weight:600;color:${selected===q.correct?'var(--green)':'var(--red)'};margin-bottom:6px">
+          ${selected===q.correct?'✅ ¡Correcto!':'❌ Incorrecto'}
+        </div>
+        <div style="font-size:13px;line-height:1.7;color:var(--text-secondary)">${q.feedback[selected]}</div>
+        ${q.fact?`<div style="margin-top:10px;padding:9px 12px;background:var(--gold-dim);border-radius:8px;border:1px solid var(--gold-border);font-size:12px;color:var(--gold)">💡 ${q.fact}</div>`:''}
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button id="btn-pq-next" style="background:linear-gradient(135deg,var(--gold),var(--gold-light));border:none;border-radius:8px;padding:10px 22px;font-size:13px;font-weight:600;color:#1a1000;cursor:pointer">
+            Otra categoría →
+          </button>
+          <button id="btn-pq-same" style="background:var(--blue-dim);border:1px solid rgba(59,130,246,.3);border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;color:var(--blue-jur);cursor:pointer">
+            Misma materia
+          </button>
+          <button id="btn-pq-results" style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--text-secondary);cursor:pointer">
+            Ver puntaje
+          </button>
+        </div>
+      </div>` : ''}
+    </div>
+  </div>`;
+  
+  document.getElementById('btn-pq-back-menu')?.addEventListener('click',()=>{ PQ_STATE.mode='menu'; renderPQMenu(el); });
+  document.getElementById('btn-pq-next')?.addEventListener('click',()=>{ PQ_STATE.mode='menu'; renderPQMenu(el); });
+  document.getElementById('btn-pq-same')?.addEventListener('click',()=>startPQRound(cat));
+  document.getElementById('btn-pq-results')?.addEventListener('click',()=>{ PQ_STATE.mode='results'; renderPQResults(el); });
+  
+  el.querySelectorAll('[data-pqi]').forEach(b => b.addEventListener('click',()=>{
+    if(PQ_STATE.answered) return;
+    const i = parseInt(b.dataset.pqi);
+    PQ_STATE.answered = true;
+    PQ_STATE.selected = i;
+    const correct = i === PQ_STATE.question.correct;
+    PQ_STATE.scores.solo.total++;
+    if(correct){ PQ_STATE.scores.solo.correct++; STATE.xp+=30; updateHeader(); }
+    STATE.totalQuestions++;
+    if(correct) STATE.correctAnswers++;
+    saveUserProgress();
+    renderPQQuestion(el);
+  }));
+}
+
+function renderPQResults(el){
+  const s = PQ_STATE.scores.solo;
+  const pct = s.total ? Math.round((s.correct/s.total)*100) : 0;
+  el.innerHTML = `
+  <div class="page-header"><div class="page-title">🎯 Tu puntaje — Preguntados</div></div>
+  <div class="page-body" style="max-width:560px;margin:0 auto;text-align:center">
+    <div class="card card-gold" style="padding:40px 28px;margin-bottom:16px">
+      <div style="font-family:'Playfair Display',serif;font-size:52px;font-weight:700;color:${pct>=70?'var(--green)':pct>=50?'var(--amber)':'var(--red)'}">${pct}%</div>
+      <div style="font-size:17px;font-weight:600;margin-bottom:6px;color:${pct>=70?'var(--green)':pct>=50?'var(--amber)':'var(--red)'}">
+        ${pct>=70?'Excelente dominio jurídico':pct>=50?'Buen nivel, sigue practicando':'Necesitas repasar más'}
+      </div>
+      <div style="font-size:14px;color:var(--text-muted)">${s.correct} correctas de ${s.total} preguntas</div>
+      <div style="margin-top:20px;display:flex;gap:10px;justify-content:center">
+        <button id="btn-pq-play-again" class="btn-primary" style="width:auto;padding:10px 24px">Jugar de nuevo</button>
+        <button id="btn-pq-share-score" class="btn-ghost">Compartir reto</button>
+      </div>
+    </div>
+  </div>`;
+  document.getElementById('btn-pq-play-again')?.addEventListener('click',()=>{ PQ_STATE.scores.solo={correct:0,total:0}; PQ_STATE.mode='menu'; renderPQMenu(el); });
+  document.getElementById('btn-pq-share-score')?.addEventListener('click',()=>crearReto(el));
+}
+
+function crearReto(){
+  const cat = SUBJECTS[Math.floor(Math.random()*SUBJECTS.length)];
+  const code = cat.id.toUpperCase().slice(0,5).replace('_','') + '-' + Math.floor(1000+Math.random()*9000);
+  PQ_STATE.retoCode = code;
+  const s = PQ_STATE.scores.solo;
+  const retoData = {
+    code, cat: cat.id, catName: cat.name,
+    challenger: STATE.currentUser?.name?.split(' ')[0] || 'Anónimo',
+    score: s.correct, total: s.total,
+    pct: s.total ? Math.round((s.correct/s.total)*100) : 0,
+    ts: Date.now()
+  };
+  localStorage.setItem('pq_reto_'+code, JSON.stringify(retoData));
+  // Re-render menu to show the code
+  const el = document.getElementById('page-preguntados');
+  if(el) renderPQMenu(el);
+}
+
+function aceptarReto(){
+  const input = document.getElementById('pq-reto-input');
+  const errEl = document.getElementById('pq-reto-error');
+  const code = (input?.value||'').trim().toUpperCase();
+  if(!code){ if(errEl){errEl.textContent='Ingresa el código del reto.';errEl.style.display='block';} return; }
+  const stored = localStorage.getItem('pq_reto_'+code);
+  if(!stored){ if(errEl){errEl.textContent='Código no encontrado. Verifica que sea correcto.';errEl.style.display='block';} return; }
+  const reto = JSON.parse(stored);
+  if(errEl) errEl.style.display='none';
+  PQ_STATE.mode = 'challenge';
+  PQ_STATE.retoCode = code;
+  PQ_STATE.opponentName = reto.challenger;
+  const el = document.getElementById('page-preguntados');
+  renderPQChallenge(el, reto);
+}
+
+function renderPQChallenge(el, reto){
+  if(!reto && PQ_STATE.retoCode){
+    const stored = localStorage.getItem('pq_reto_'+PQ_STATE.retoCode);
+    reto = stored ? JSON.parse(stored) : null;
+  }
+  if(!reto){ PQ_STATE.mode='menu'; renderPQMenu(el); return; }
+  const cat = SUBJECTS.find(s=>s.id===reto.cat) || SUBJECTS[0];
+  el.innerHTML = `
+  <div class="page-header"><div class="page-title">⚔️ Reto de ${reto.challenger}</div><div class="page-subtitle">Categoría: ${reto.catName} · Debes superar ${reto.pct}% (${reto.score}/${reto.total})</div></div>
+  <div class="page-body" style="max-width:640px;margin:0 auto">
+    <div class="card card-gold" style="text-align:center;padding:32px 24px;margin-bottom:16px">
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:6px">${reto.challenger} obtuvo:</div>
+      <div style="font-family:'Playfair Display',serif;font-size:42px;font-weight:700;color:var(--gold)">${reto.pct}%</div>
+      <div style="font-size:13px;color:var(--text-secondary);margin-bottom:20px">${reto.score} correctas de ${reto.total} en ${reto.catName}</div>
+      <div style="font-size:14px;color:var(--text-primary);margin-bottom:16px">¿Puedes superarlo? Responde ${reto.total || 5} preguntas de <strong style="color:var(--gold)">${reto.catName}</strong></div>
+      <button id="btn-accept-challenge" style="background:linear-gradient(135deg,var(--gold),var(--gold-light));border:none;border-radius:8px;padding:12px 32px;font-size:14px;font-weight:600;color:#1a1000;cursor:pointer">
+        Aceptar el reto ⚔️
+      </button>
+    </div>
+    <button id="btn-pq-back-menu-ch" class="btn-ghost">← Volver al menú</button>
+  </div>`;
+  document.getElementById('btn-pq-back-menu-ch')?.addEventListener('click',()=>{ PQ_STATE.mode='menu'; renderPQMenu(el); });
+  document.getElementById('btn-accept-challenge')?.addEventListener('click',()=>startPQRound(cat));
+}
+
 // ============================================================
 // UTILS
 // ============================================================
@@ -2822,9 +3301,16 @@ function _togglePass(inputId,iconId){
   const savedKey=localStorage.getItem('lp_key');
   if(savedBin&&savedBin!=='TU_BIN_ID_AQUI')JSONBIN.BIN_ID=savedBin;
   if(savedKey&&savedKey!=='TU_API_KEY_AQUI')JSONBIN.API_KEY=savedKey;
+  // Pre-restore session to get credentials BEFORE dbLoad
+  try{
+    const preSession=JSON.parse(localStorage.getItem(SESSION_KEY)||'{}');
+    if(preSession.binId&&preSession.binId!=='TU_BIN_ID_AQUI'){JSONBIN.BIN_ID=preSession.binId;localStorage.setItem('lp_bin',preSession.binId);}
+    if(preSession.binApiKey&&preSession.binApiKey!=='TU_API_KEY_AQUI'){JSONBIN.API_KEY=preSession.binApiKey;localStorage.setItem('lp_key',preSession.binApiKey);}
+    if(preSession.geminiKey){STATE.geminiKey=preSession.geminiKey;DB.config.geminiKey=preSession.geminiKey;}
+  }catch(e){}
   // Always load remote DB BEFORE rendering anything (fixes cross-device config)
   await dbLoad();
-  // Always sync geminiKey from DB into STATE after load
+  // Always sync geminiKey from DB into STATE after load (DB is authoritative)
   if(DB.config.geminiKey)STATE.geminiKey=DB.config.geminiKey;
   // If DB has valid credentials, persist them to localStorage for future loads
   if(DB.config.binId&&DB.config.binId!=='TU_BIN_ID_AQUI'){
@@ -2853,11 +3339,15 @@ function _togglePass(inputId,iconId){
       STATE.streak=safeNum(user.streak??session.streak,0);
       STATE.totalQuestions=safeNum(user.totalQ??session.totalQuestions,0);
       STATE.correctAnswers=safeNum(user.correctQ??session.correctAnswers,0);
-      // subjectProgress: merge DB (authoritative) with session (may have newer data)
-      STATE.subjectProgress={...(user.subjectProgress||{}),...(session.subjectProgress||{})};
-      STATE.simResults=Array.isArray(session.simResults)?session.simResults:(Array.isArray(user.simResults)?user.simResults:[]);
+      // subjectProgress: DB is authoritative (already synced on login)
+      STATE.subjectProgress={...(user.subjectProgress||{})};
+      // Prefer session simResults if more recent (user just did a sim)
+      const dbSims=Array.isArray(user.simResults)?user.simResults:[];
+      const sessSims=Array.isArray(session.simResults)?session.simResults:[];
+      STATE.simResults=sessSims.length>=dbSims.length?sessSims:dbSims;
       STATE.quizHistory=Array.isArray(session.quizHistory)?session.quizHistory:[];
-      STATE.geminiKey=DB.config.geminiKey||'';
+      // geminiKey: DB config is authoritative; session as fallback for offline
+      STATE.geminiKey=DB.config.geminiKey||session.geminiKey||'';
       if(session.examDate)STATE.examDate=new Date(session.examDate);
       else if(user.examDate)STATE.examDate=new Date(user.examDate);
       _show();enterApp();return;
