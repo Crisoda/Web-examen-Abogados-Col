@@ -604,7 +604,7 @@ a{color:inherit;text-decoration:none}
       <div class="auth-divider">o</div>
       <div class="auth-switch">¿No tienes cuenta? <span id="link-to-register">Regístrate gratis</span></div>
       <div class="auth-switch" style="margin-top:8px"><span id="link-to-admin">Acceso administrador</span></div>
-      <div class="auth-demo">Acceso demo — <strong style="color:var(--gold)">estudiante@lexprep.co</strong> / <strong style="color:var(--gold)">password123</strong></div>
+      <div class="auth-demo">Acceso demo — <strong style="color:var(--gold)">estudiante@lexprep.co</strong> / <strong style="color:var(--gold)">password123</strong> &nbsp;|&nbsp; Admin: <strong style="color:var(--gold)">admin2025</strong></div>
     </div>
   </div>
 
@@ -775,8 +775,8 @@ a{color:inherit;text-decoration:none}
 // CONFIG — JSONBin (cloud persistence)
 // ============================================================
 const JSONBIN = {
-  BIN_ID: 'TU_BIN_ID_AQUI',
-  API_KEY: 'TU_API_KEY_AQUI',
+  BIN_ID: '6922381b43b1c97be9be9feb',
+  API_KEY: '$2a$10$W7s.05OWI75ZtGSgMS6C/unGtcUoKdl6Q.ptuGpqf44.wQVn9hrJu',
   BASE_URL: 'https://api.jsonbin.io/v3/b'
 };
 
@@ -851,11 +851,12 @@ function resetInactivityTimer(){
 // ============================================================
 const DB_DEFAULTS={
   users:[
-    {id:1,name:'María Alejandra Gómez',email:'estudiante@lexprep.co',pass:'password123',uni:'U. Nacional',joined:'2025-03-01',progress:62,status:'active',plan:'free',xp:2840,streak:7,totalQ:248,correctQ:154,subjectProgress:{}},
+    {id:1,name:'María Alejandra Gómez',email:'estudiante@lexprep.co',pass:'password123',uni:'U. Nacional',joined:'2025-03-01',progress:50,status:'active',plan:'free',xp:2840,streak:7,totalQ:248,correctQ:154,subjectProgress:{}},
     {id:2,name:'Carlos Andrés Pérez',email:'carlos@lexprep.co',pass:'pass123',uni:'U. de los Andes',joined:'2025-02-15',progress:78,status:'active',plan:'premium',xp:4200,streak:14,totalQ:390,correctQ:304,subjectProgress:{}},
     {id:3,name:'Laura Sofía Mora',email:'laura@lexprep.co',pass:'pass123',uni:'U. Javeriana',joined:'2025-04-01',progress:45,status:'active',plan:'free',xp:980,streak:3,totalQ:120,correctQ:54,subjectProgress:{}},
+    {id:1778267078628,name:'Cristian Peñaloza',email:'cristian.penaloza.baron@gmail.com',pass:'lol2025',uni:'Universidad Cooperativa de Colombia',joined:'2026-05-08',progress:49,status:'active',plan:'free',xp:100,streak:0,totalQ:5,correctQ:2,subjectProgress:{}},
   ],
-  config:{geminiKey:'',adminPass:'lp_admin_2025',examDate:'',platformName:'LexPrep',extraSubjects:[],binId:'',binApiKey:''},
+  config:{geminiKey:'AIzaSyC_Zs-6xQY9nA9Y0MOnIqfnQqiFVRHRkDU',adminPass:'admin2025',examDate:'',platformName:'LexPrep',extraSubjects:[],binId:'6922381b43b1c97be9be9feb',binApiKey:'$2a$10$W7s.05OWI75ZtGSgMS6C/unGtcUoKdl6Q.ptuGpqf44.wQVn9hrJu'},
   simResults:[]
 };
 let DB=JSON.parse(JSON.stringify(DB_DEFAULTS));
