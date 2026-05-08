@@ -2711,7 +2711,7 @@ function _togglePass(inputId,iconId){
       STATE.totalQuestions=safeNum(user.totalQ??session.totalQuestions,0);
       STATE.correctAnswers=safeNum(user.correctQ??session.correctAnswers,0);
       // subjectProgress: merge DB (authoritative) with session (may have newer data)
-      STATE.subjectProgress={...(user.subjectProgress||{}),(session.subjectProgress||{})};
+      STATE.subjectProgress={...(user.subjectProgress||{}),...(session.subjectProgress||{})};
       STATE.simResults=Array.isArray(session.simResults)?session.simResults:(Array.isArray(user.simResults)?user.simResults:[]);
       STATE.quizHistory=Array.isArray(session.quizHistory)?session.quizHistory:[];
       STATE.geminiKey=DB.config.geminiKey||'';
