@@ -1157,8 +1157,12 @@ async function geminiCall(prompt,genConfig={}){
     }
     if(skipEndpoint)continue;
   }
-  if(hit429)throw new Error('Cuota de IA agotada. Espera 1 minuto e intenta de nuevo.');
-  throw new Error('No se pudo conectar con la IA: '+lastError);
+  // Si todos los endpoints dieron 404/400 (modelos no disponibles), el error real es de conectividad,
+  // no de cuota — aunque alguno haya dado 429 en el camino.
+  const allNotFound=lastError&&(lastError.includes('not found')||lastError.includes('404')||lastError.includes('400'));
+  if(hit429&&!allNotFound)throw new Error('Cuota de IA agotada. Espera 1 minuto e intenta de nuevo.');
+  if(hit429&&allNotFound)throw new Error('Algunos modelos están en cuota y otros no están disponibles. Intenta en 1 minuto.');
+  throw new Error('No se pudo conectar con ningún modelo de IA: '+lastError);
 }
 
 function shuffleOptions(opts,feed){
@@ -2032,7 +2036,9 @@ async function sendMessage(){
       if(aiText!==null)break;
       if(skipEndpoint)continue;
     }
-    if(aiText===null)throw new Error('No se pudo conectar con ningún modelo de IA. Verifica la API key o intenta en 1–2 minutos.');
+    if(aiText===null){
+      throw new Error('No se pudo conectar con ningún modelo de IA. Verifica que la API key esté activa en Google AI Studio → Panel Admin → Configuración.');
+    }
     STATE.chatHistory.push({role:'ai',text:aiText});
   }catch(err){
     STATE.chatHistory.push({role:'ai',text:`**Error:** ${err.message}`});
@@ -2614,21 +2620,36 @@ async function saveAdminGeminiKey(){
 async function testAdminKey(){
   const key=document.getElementById('admin-gemini-key')?.value?.trim();
   const resEl=document.getElementById('admin-key-test');
+  const btn=document.getElementById('btn-test-admin-key');
   if(!key){if(resEl)resEl.innerHTML='<div style="color:var(--red);font-size:12px">Ingresa una key primero.</div>';return;}
-  if(resEl)resEl.innerHTML='<div style="font-size:12px;color:var(--text-muted)">Probando… <span class="loading-dot"></span><span class="loading-dot"></span></div>';
+  if(resEl)resEl.innerHTML='<div style="font-size:12px;color:var(--text-muted)">Probando todos los modelos… <span class="loading-dot"></span><span class="loading-dot"></span></div>';
+  if(btn){btn.textContent='Probando…';btn.disabled=true;}
+  const body=JSON.stringify({contents:[{parts:[{text:'responde solo: ok'}]}],generationConfig:{maxOutputTokens:5}});
+  let modelOk=null,hit429=false,authError=false;
   try{
-    let ok=false,q429=false;
     for(const b of GEMINI_ENDPOINTS){
-      const r=await fetch(`${b}?key=${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:'ok'}]}],generationConfig:{maxOutputTokens:5}})});
-      if(r.status===401||r.status===403){if(resEl)resEl.innerHTML='<div style="color:var(--red);font-size:12px">API key inválida o sin permisos.</div>';return;}
-      if(r.status===404||r.status===400)continue;
-      if(r.status===429){q429=true;continue;}
-      if(r.ok){ok=true;break;}
+      try{
+        const r=await fetch(`${b}?key=${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body});
+        if(r.status===401||r.status===403){authError=true;break;}
+        if(r.status===404||r.status===400){continue;}
+        if(r.status===429){hit429=true;continue;}
+        if(r.ok){modelOk=b.match(/models\/([^:]+)/)?.[1]||'Gemini';break;}
+      }catch(netErr){continue;}
     }
-    if(ok)if(resEl)resEl.innerHTML='<div style="color:var(--green);font-size:12px">Conexión exitosa con Google Gemini. API key válida.</div>';
-    else if(q429)if(resEl)resEl.innerHTML='<div style="color:var(--amber);font-size:12px">API key válida. Cuota por minuto al límite — espera 1 min.</div>';
-    else if(resEl)resEl.innerHTML='<div style="color:var(--red);font-size:12px">No se pudo conectar. Verifica la key.</div>';
-  }catch(e){if(resEl)resEl.innerHTML=`<div style="color:var(--red);font-size:12px">Error: ${e.message}</div>`;}
+    if(authError){
+      if(resEl)resEl.innerHTML='<div style="color:var(--red);font-size:13px;padding:8px 0">❌ API key inválida o sin permisos. Verifica en <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--blue-jur)">aistudio.google.com</a></div>';
+    }else if(modelOk){
+      if(resEl)resEl.innerHTML=`<div style="color:var(--green);font-size:13px;padding:8px 0">✅ Conexión exitosa · Modelo activo: <strong>${modelOk}</strong></div>`;
+    }else if(hit429){
+      if(resEl)resEl.innerHTML='<div style="color:var(--amber);font-size:13px;padding:8px 0">⚠️ API key válida pero cuota por minuto al límite. Espera 60 segundos e intenta de nuevo.</div>';
+    }else{
+      if(resEl)resEl.innerHTML='<div style="color:var(--red);font-size:13px;padding:8px 0">❌ No se pudo conectar con ningún modelo. Verifica que la key esté activa en Google AI Studio.</div>';
+    }
+  }catch(e){
+    if(resEl)resEl.innerHTML=`<div style="color:var(--red);font-size:12px">Error: ${e.message}</div>`;
+  }finally{
+    if(btn){btn.textContent='Probar conexión';btn.disabled=false;}
+  }
 }
 async function saveAdminPass(){
   const np=document.getElementById('admin-new-pass')?.value?.trim();
