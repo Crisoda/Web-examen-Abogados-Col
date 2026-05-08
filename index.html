@@ -1095,23 +1095,35 @@ const GEMINI_ENDPOINTS=[
 ];
 
 function extraerJSON(texto){
-  texto=texto.replace(/```json\s*/g,'').replace(/```/g,'').trim();
+  // Paso 1: limpiar bloques de código markdown
+  texto=texto.replace(/```json\s*/gi,'').replace(/```\s*/g,'').trim();
+  // Paso 2: intentar parseo directo
   try{return JSON.parse(texto);}catch{}
+  // Paso 3: extraer entre primera { y última }
   const ini=texto.indexOf('{'),fin=texto.lastIndexOf('}');
   if(ini!==-1&&fin>ini){
     let b=texto.slice(ini,fin+1);
     try{return JSON.parse(b);}catch{}
+    // Paso 4: limpiar comas finales antes de cierre
     b=b.replace(/,\s*([}\]])/g,'$1');
     try{return JSON.parse(b);}catch{}
+    // Paso 5: escapar saltos de línea dentro de strings
+    b=b.replace(/"([^"]*)"/g,(_,s)=>'"'+s.replace(/\n/g,'\\n').replace(/\r/g,'').replace(/\t/g,'\\t')+'"');
+    try{return JSON.parse(b);}catch{}
   }
+  // Paso 6: JSON truncado — intentar reparar cerrando llaves y corchetes
   if(ini!==-1){
     let b=texto.slice(ini).replace(/,\s*([}\]])/g,'$1').trimEnd();
+    // Detectar string abierto (número impar de comillas sin escapar)
     const q=(b.match(/(?<!\\)"/g)||[]).length;
     if(q%2!==0)b=b.replace(/,?\s*$/,'')+'"';
     b=b.replace(/,\s*$/,'');
     const ll=(b.match(/{/g)||[]).length-(b.match(/}/g)||[]).length;
     const co=(b.match(/\[/g)||[]).length-(b.match(/\]/g)||[]).length;
     b+=']'.repeat(Math.max(0,co))+'}' .repeat(Math.max(0,ll));
+    try{return JSON.parse(b);}catch{}
+    // Último intento: limpiar de nuevo tras reparación
+    b=b.replace(/,\s*([}\]])/g,'$1');
     try{return JSON.parse(b);}catch{}
   }
   throw new Error('JSON inválido en respuesta IA');
@@ -1557,7 +1569,7 @@ Instrucciones por pregunta:
 - Feedback detallado con cita normativa y jurisprudencial.
 - Dificultad ALTA: varias opciones parecen correctas.
 
-Responde ÚNICAMENTE con JSON válido, sin texto adicional:
+RESPONDE ÚNICAMENTE con el JSON a continuación. Sin texto antes ni después. Sin bloques de código markdown. Sin explicaciones. Solo el JSON puro:
 {
   "caseText": "Caso jurídico extenso, mínimo 6 oraciones, con todos los hechos, contexto y sujetos.",
   "questions": [
@@ -1569,8 +1581,9 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
     }
   ]
 }`;
-    const text=await geminiCall(prompt,{temperature:.8,maxOutputTokens:8192});
+    const text=await geminiCall(prompt,{temperature:.7,maxOutputTokens:8192});
     const parsed=extraerJSON(text);
+    if(!parsed?.caseText||!Array.isArray(parsed?.questions)||!parsed.questions.length)throw new Error('JSON inválido en respuesta IA');
     // Shuffle each question's options
     const shuffledQuestions=parsed.questions.map(q=>{
       const s=shuffleOptions(q.options,q.feedback);
@@ -1584,28 +1597,44 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
     STATE.quizState={caseSet,currentQ:0,answered:false,selected:null};
     renderCaseQuestion(el,subjectId,subjectName);
   }catch(err){
-    const is429=err.message?.includes('429')||err.message?.includes('quota');
-    if(is429){
-      // Use local sample case
+    const isQuota=err.message?.includes('429')||err.message?.includes('quota')||err.message?.includes('Cuota');
+    const isJSON=err.message?.includes('JSON')||err.message?.includes('json')||err.message?.includes('parse');
+    const needsKey=err.message?.includes('no configurada');
+    // Para errores de JSON o cuota: usar caso local como fallback silencioso
+    if((isQuota||isJSON)&&!needsKey){
       const local=SAMPLE_CASES.find(c=>c.subject===subjectId)||SAMPLE_CASES[Math.floor(Math.random()*SAMPLE_CASES.length)];
       STATE.quizState={caseSet:{...local,subjectName},currentQ:0,answered:false,selected:null};
       renderCaseQuestion(el,subjectId,subjectName);
       setTimeout(()=>{
         const n=document.createElement('div');
         n.style.cssText='position:fixed;bottom:20px;right:20px;background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.4);border-radius:10px;padding:11px 16px;font-size:12px;color:var(--amber);max-width:300px;z-index:999;line-height:1.6';
-        n.textContent='Cuota de IA temporalmente agotada. Mostrando caso del banco local.';
-        document.body.appendChild(n);setTimeout(()=>n.remove(),6000);
-      },300);return;
+        n.innerHTML=isJSON
+          ?'<strong>IA respondió en formato incorrecto.</strong><br>Mostrando caso del banco local. Intenta de nuevo para obtener una pregunta generada por IA.'
+          :'<strong>Cuota de IA temporalmente agotada.</strong><br>Mostrando caso del banco local.';
+        document.body.appendChild(n);setTimeout(()=>n.remove(),7000);
+      },300);
+      console.warn('[LexPrep] loadAICaseSet fallback local:',err.message);
+      return;
     }
-    const needsKey=err.message?.includes('no configurada');
+    // Para errores sin API key o de red: mostrar pantalla de error
     el.innerHTML=`<div class="page-header"><div class="page-title">Preguntas con IA</div></div>
     <div class="page-body" style="max-width:820px;margin:0 auto">
     <div class="card" style="text-align:center;padding:36px">
     <div class="font-serif text-lg font-700 mb-2">Error al generar caso</div>
     <div class="text-secondary text-sm mb-4">${err.message}</div>
     ${needsKey?'<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:11px;font-size:13px;color:var(--amber);margin-bottom:14px">El administrador debe ingresar la API key de Google AI en el panel de administración.</div>':''}
-    <button id="btn-back-quiz" class="btn-primary" style="width:auto;padding:10px 22px">← Volver</button>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <button id="btn-retry-quiz" style="background:var(--gold-dim);border:1px solid var(--gold-border);border-radius:8px;padding:10px 22px;font-size:13px;font-weight:600;color:var(--gold);cursor:pointer">Reintentar con IA</button>
+      <button id="btn-local-quiz" style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:10px 22px;font-size:13px;color:var(--text-secondary);cursor:pointer">Usar caso del banco local</button>
+      <button id="btn-back-quiz" class="btn-primary" style="width:auto;padding:10px 22px">← Volver</button>
+    </div>
     </div></div>`;
+    document.getElementById('btn-retry-quiz')?.addEventListener('click',()=>loadAICaseSet(subjectId,subjectName));
+    document.getElementById('btn-local-quiz')?.addEventListener('click',()=>{
+      const local=SAMPLE_CASES.find(c=>c.subject===subjectId)||SAMPLE_CASES[Math.floor(Math.random()*SAMPLE_CASES.length)];
+      STATE.quizState={caseSet:{...local,subjectName},currentQ:0,answered:false,selected:null};
+      renderCaseQuestion(el,subjectId,subjectName);
+    });
     document.getElementById('btn-back-quiz')?.addEventListener('click',()=>renderQuiz(el));
   }
 }
@@ -1787,9 +1816,9 @@ Genera UNA pregunta sobre ${s.name}:
 - Correcta SIEMPRE en índice 0, "correct": 0
 - Dificultad MUY ALTA
 
-JSON válido únicamente:
+RESPONDE ÚNICAMENTE con el siguiente JSON. Cero texto antes o después. Sin bloques de código. Sin explicaciones:
 {"caseText":"caso 5-8 oraciones","text":"pregunta técnica","options":["CORRECTA (índice 0)","Distractor B","Distractor C","Distractor D"],"correct":0,"feedback":["análisis 0 CORRECTO","análisis 1 incorrecto","análisis 2 incorrecto","análisis 3 incorrecto"]}`;
-      const txt=await geminiCall(prompt,{temperature:.8,maxOutputTokens:8192});
+      const txt=await geminiCall(prompt,{temperature:.7,maxOutputTokens:8192});
       const q=extraerJSON(txt);
       const sh=shuffleOptions(q.options,q.feedback);
       questions.push({id:Date.now()+i,subject:s.id,subjectName:s.name,type:'situacional',caseText:q.caseText,text:q.text,options:sh.options,correct:sh.correct,feedback:sh.feedback});
