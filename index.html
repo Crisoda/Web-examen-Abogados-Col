@@ -1083,11 +1083,15 @@ const FLASHCARDS_DATA=[
 // ============================================================
 // GEMINI API — multi-endpoint with fallback
 // ============================================================
+// Endpoints ordenados de más reciente a más estable.
+// El protocolo de fallback prueba cada uno automáticamente.
 const GEMINI_ENDPOINTS=[
-  'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
+  'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent',
 ];
 
 function extraerJSON(texto){
@@ -1119,22 +1123,41 @@ async function geminiCall(prompt,genConfig={}){
   const cfg={temperature:.8,maxOutputTokens:8192,...genConfig};
   const body=JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:cfg});
   let lastError='Sin respuesta';
+  let hit429=false;
   for(const baseUrl of GEMINI_ENDPOINTS){
     const url=`${baseUrl}?key=${key}`;
+    let skipEndpoint=false;
     for(let attempt=1;attempt<=2;attempt++){
       try{
         const resp=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body});
-        if(resp.status===429){lastError='429_quota';if(attempt<2)await new Promise(r=>setTimeout(r,12000));continue;}
-        if(resp.status===404||resp.status===400){const e=await resp.json().catch(()=>({}));lastError=e.error?.message||`HTTP ${resp.status}`;break;}
+        if(resp.status===404||resp.status===400){
+          const e=await resp.json().catch(()=>({}));
+          lastError=e.error?.message||`HTTP ${resp.status}`;
+          skipEndpoint=true;break;
+        }
+        if(resp.status===429){
+          hit429=true;lastError='429_quota';
+          if(attempt<2){await new Promise(r=>setTimeout(r,8000));continue;}
+          skipEndpoint=true;break;
+        }
+        if(resp.status===401||resp.status===403){
+          const e=await resp.json().catch(()=>({}));
+          throw new Error('API key inválida: '+(e.error?.message||`HTTP ${resp.status}`));
+        }
         if(!resp.ok){const e=await resp.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${resp.status}`);}
         const data=await resp.json();
         const text=(data.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json|```/g,'').trim();
-        if(!text)throw new Error('Respuesta vacía');
+        if(!text)throw new Error('Respuesta vacía del modelo');
+        console.log('[LexPrep] IA OK:',baseUrl.match(/models\/([^:]+)/)?.[1]||'?');
         return text;
-      }catch(err){if(err.message==='429_quota')continue;throw err;}
+      }catch(err){
+        if(err.name==='TypeError'||err.message.includes('fetch')){lastError=err.message;skipEndpoint=true;break;}
+        throw err;
+      }
     }
+    if(skipEndpoint)continue;
   }
-  if(lastError==='429_quota')throw new Error('Cuota de IA agotada. Espera 1 minuto.');
+  if(hit429)throw new Error('Cuota de IA agotada. Espera 1 minuto e intenta de nuevo.');
   throw new Error('No se pudo conectar con la IA: '+lastError);
 }
 
@@ -1988,17 +2011,28 @@ async function sendMessage(){
     const body=JSON.stringify({contents:geminiMessages,generationConfig:{temperature:.7,maxOutputTokens:4096}});
     let aiText=null;
     for(const baseUrl of GEMINI_ENDPOINTS){
-      const url=`${baseUrl}?key=${key}`;let ef=false;
+      const url=`${baseUrl}?key=${key}`;
+      let skipEndpoint=false;
       for(let a=1;a<=2;a++){
-        const resp=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body});
-        if(resp.status===429){if(a<2)await new Promise(r=>setTimeout(r,12000));continue;}
-        if(resp.status===404||resp.status===400){ef=true;break;}
-        if(!resp.ok){const e=await resp.json().catch(()=>({}));throw new Error('Error '+resp.status+' — '+(e.error?.message||'Verifica la API key'));}
-        const data=await resp.json();aiText=data.candidates?.[0]?.content?.parts?.[0]?.text||'No pude generar respuesta.';break;
+        try{
+          const resp=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body});
+          if(resp.status===404||resp.status===400){skipEndpoint=true;break;}
+          if(resp.status===429){if(a<2){await new Promise(r=>setTimeout(r,8000));continue;}skipEndpoint=true;break;}
+          if(resp.status===401||resp.status===403){const e=await resp.json().catch(()=>({}));throw new Error('API key inválida: '+(e.error?.message||`HTTP ${resp.status}`));}
+          if(!resp.ok){const e=await resp.json().catch(()=>({}));throw new Error('Error '+resp.status+' — '+(e.error?.message||'Verifica la API key'));}
+          const data=await resp.json();
+          aiText=data.candidates?.[0]?.content?.parts?.[0]?.text||'No pude generar respuesta.';
+          console.log('[LexPrep] Tutor OK:',baseUrl.match(/models\/([^:]+)/)?.[1]||'?');
+          break;
+        }catch(err){
+          if(err.name==='TypeError'||err.message.includes('fetch')){skipEndpoint=true;break;}
+          throw err;
+        }
       }
-      if(aiText!==null)break;if(!ef)continue;
+      if(aiText!==null)break;
+      if(skipEndpoint)continue;
     }
-    if(aiText===null)throw new Error('Todos los modelos de IA están saturados. Intenta en 1–2 minutos.');
+    if(aiText===null)throw new Error('No se pudo conectar con ningún modelo de IA. Verifica la API key o intenta en 1–2 minutos.');
     STATE.chatHistory.push({role:'ai',text:aiText});
   }catch(err){
     STATE.chatHistory.push({role:'ai',text:`**Error:** ${err.message}`});
