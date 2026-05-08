@@ -121,6 +121,19 @@ a{color:inherit;text-decoration:none}
 .auth-error{background:var(--red-dim);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--red);margin-bottom:14px;display:none}
 .auth-success{background:var(--green-dim);border:1px solid rgba(16,185,129,.3);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--green);margin-bottom:14px;display:none}
 .auth-demo{margin-top:18px;padding:11px 14px;background:var(--bg-elevated);border-radius:8px;font-size:12px;color:var(--text-muted);line-height:1.6}
+/* Password toggle wrapper */
+.pass-wrapper{position:relative;display:flex;align-items:center}
+.pass-wrapper .form-input{padding-right:44px}
+.pass-toggle{
+  position:absolute;right:0;top:0;bottom:0;width:42px;
+  display:flex;align-items:center;justify-content:center;
+  background:transparent;border:none;cursor:pointer;
+  color:var(--text-muted);font-size:16px;flex-shrink:0;
+  transition:color .15s var(--ease);
+  -webkit-tap-highlight-color:transparent;
+}
+.pass-toggle:hover{color:var(--gold)}
+.pass-toggle svg{pointer-events:none;width:18px;height:18px;flex-shrink:0}
 
 /* ================================================
    APP LAYOUT
@@ -162,7 +175,7 @@ a{color:inherit;text-decoration:none}
 }
 .user-info .user-name{font-size:13px;font-weight:500}
 .user-info .user-role{font-size:11px;color:var(--text-muted)}
-.main-content{margin-left:260px;flex:1;min-width:0;min-height:100dvh;background:var(--bg-deep)}
+.main-content{margin-left:260px;flex:1;min-width:0;min-height:100dvh;background:var(--bg-deep);padding-bottom:env(safe-area-inset-bottom,0px)}
 .page-header{padding:26px 30px 0;display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px}
 .page-title{font-family:'Playfair Display',serif;font-size:24px;font-weight:700}
 .page-subtitle{font-size:14px;color:var(--text-secondary);margin-top:4px}
@@ -468,7 +481,8 @@ a{color:inherit;text-decoration:none}
   .grid-2{gap:10px}.grid-3{gap:10px}
   .medals-grid{grid-template-columns:repeat(3,1fr)}
 }
-@media(max-width:768px){
+/* Tablet breakpoint — sidebar slides like mobile */
+@media(max-width:900px){
   .app{display:block}
   .sidebar{
     transform:translateX(-260px);width:260px;
@@ -476,8 +490,10 @@ a{color:inherit;text-decoration:none}
     position:fixed;z-index:200;
   }
   .sidebar.open{transform:translateX(0)}
-  .main-content{margin-left:0;width:100%}
+  .main-content{margin-left:0!important;width:100%}
   .mobile-menu-btn{display:flex!important}
+}
+@media(max-width:768px){
   .topbar{padding:8px 16px}
   .page-header{padding:14px 14px 0;flex-direction:column;align-items:flex-start;gap:8px}
   .page-body{padding:14px 14px 32px}
@@ -577,7 +593,12 @@ a{color:inherit;text-decoration:none}
       </div>
       <div class="form-group">
         <label class="form-label" for="login-pass">Contraseña</label>
-        <input class="form-input" type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password"/>
+        <div class="pass-wrapper">
+          <input class="form-input" type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password"/>
+          <button type="button" class="pass-toggle" id="toggle-login-pass" aria-label="Mostrar/ocultar contraseña">
+            <svg id="eye-login" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
       </div>
       <button class="btn-primary" id="btn-login">Ingresar a LexPrep →</button>
       <div class="auth-divider">o</div>
@@ -611,7 +632,12 @@ a{color:inherit;text-decoration:none}
       </div>
       <div class="form-group">
         <label class="form-label" for="reg-pass">Contraseña *</label>
-        <input class="form-input" type="password" id="reg-pass" placeholder="Mínimo 6 caracteres" autocomplete="new-password"/>
+        <div class="pass-wrapper">
+          <input class="form-input" type="password" id="reg-pass" placeholder="Mínimo 6 caracteres" autocomplete="new-password"/>
+          <button type="button" class="pass-toggle" id="toggle-reg-pass" aria-label="Mostrar/ocultar contraseña">
+            <svg id="eye-reg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
       </div>
       <div class="form-group">
         <label class="form-label" for="reg-date">Fecha del examen (opcional)</label>
@@ -821,69 +847,138 @@ function resetInactivityTimer(){
   document.addEventListener(e,resetInactivityTimer,{passive:true}));
 
 // ============================================================
-// DB — in-memory (synced with JSONBin)
+// DB — in-memory defaults (synced with JSONBin)
 // ============================================================
-let DB={
+const DB_DEFAULTS={
   users:[
-    {id:1,name:'María Alejandra Gómez',email:'estudiante@lexprep.co',pass:'password123',uni:'U. Nacional',joined:'2025-03-01',progress:62,status:'active',plan:'free',xp:2840,streak:7,totalQ:248,correctQ:154},
-    {id:2,name:'Carlos Andrés Pérez',email:'carlos@lexprep.co',pass:'pass123',uni:'U. de los Andes',joined:'2025-02-15',progress:78,status:'active',plan:'premium',xp:4200,streak:14,totalQ:390,correctQ:304},
-    {id:3,name:'Laura Sofía Mora',email:'laura@lexprep.co',pass:'pass123',uni:'U. Javeriana',joined:'2025-04-01',progress:45,status:'active',plan:'free',xp:980,streak:3,totalQ:120,correctQ:54},
+    {id:1,name:'María Alejandra Gómez',email:'estudiante@lexprep.co',pass:'password123',uni:'U. Nacional',joined:'2025-03-01',progress:62,status:'active',plan:'free',xp:2840,streak:7,totalQ:248,correctQ:154,subjectProgress:{}},
+    {id:2,name:'Carlos Andrés Pérez',email:'carlos@lexprep.co',pass:'pass123',uni:'U. de los Andes',joined:'2025-02-15',progress:78,status:'active',plan:'premium',xp:4200,streak:14,totalQ:390,correctQ:304,subjectProgress:{}},
+    {id:3,name:'Laura Sofía Mora',email:'laura@lexprep.co',pass:'pass123',uni:'U. Javeriana',joined:'2025-04-01',progress:45,status:'active',plan:'free',xp:980,streak:3,totalQ:120,correctQ:54,subjectProgress:{}},
   ],
-  config:{geminiKey:'',adminPass:'lp_admin_2025',examDate:'',platformName:'LexPrep',extraSubjects:[]},
+  config:{geminiKey:'',adminPass:'lp_admin_2025',examDate:'',platformName:'LexPrep',extraSubjects:[],binId:'',binApiKey:''},
   simResults:[]
 };
+let DB=JSON.parse(JSON.stringify(DB_DEFAULTS));
+
+// Guard: prevent concurrent saves overwriting each other
+let _savePromise=null;
+let _dbLoaded=false;
 
 // ============================================================
-// JSONBIN — cloud persistence
-// FIX: Store bin credentials inside the DB itself so mobile
-//      devices load them automatically on first fetch.
+// JSONBIN — robust cloud persistence
 // ============================================================
+function _hasBinConfig(){
+  return JSONBIN.BIN_ID&&JSONBIN.BIN_ID!=='TU_BIN_ID_AQUI'&&
+         JSONBIN.API_KEY&&JSONBIN.API_KEY!=='TU_API_KEY_AQUI';
+}
+
+function _mergeDB(remote){
+  // Deep-merge remote into local defaults so new fields always exist
+  const merged={
+    ...DB_DEFAULTS,
+    ...remote,
+    config:{...DB_DEFAULTS.config,...(remote.config||{})},
+    users:Array.isArray(remote.users)&&remote.users.length>0
+      ? remote.users.map(u=>({xp:0,streak:0,totalQ:0,correctQ:0,progress:0,status:'active',plan:'free',subjectProgress:{},...u}))
+      : DB.users,
+    simResults:Array.isArray(remote.simResults)?remote.simResults:[],
+  };
+  return merged;
+}
+
 async function dbLoad(){
-  // Bootstrap credentials from localStorage (set by admin panel)
+  // 1. Bootstrap credentials: localStorage first, then fallback to compiled defaults
   const savedBin=localStorage.getItem('lp_bin');
   const savedKey=localStorage.getItem('lp_key');
-  if(savedBin)JSONBIN.BIN_ID=savedBin;
-  if(savedKey)JSONBIN.API_KEY=savedKey;
-  if(!JSONBIN.BIN_ID||JSONBIN.BIN_ID==='TU_BIN_ID_AQUI')return;
+  if(savedBin&&savedBin!=='TU_BIN_ID_AQUI')JSONBIN.BIN_ID=savedBin;
+  if(savedKey&&savedKey!=='TU_API_KEY_AQUI')JSONBIN.API_KEY=savedKey;
+
+  if(!_hasBinConfig()){_dbLoaded=true;return;}
+
   try{
     const r=await fetch(`${JSONBIN.BASE_URL}/${JSONBIN.BIN_ID}/latest`,{
-      headers:{'X-Master-Key':JSONBIN.API_KEY,'X-Bin-Meta':false}
+      headers:{'X-Master-Key':JSONBIN.API_KEY,'X-Bin-Meta':'false'},
+      cache:'no-store'
     });
-    if(r.ok){
-      const data=await r.json();
-      if(data.record){
-        // Merge preserving local defaults for missing keys
-        DB={...DB,...data.record,
-          config:{...DB.config,...(data.record.config||{})},
-          users:(data.record.users&&data.record.users.length>0)?data.record.users:DB.users
-        };
-        if(DB.config?.geminiKey)STATE.geminiKey=DB.config.geminiKey;
-        // Persist bin creds in localStorage for mobile
-        if(DB.config?.binId){JSONBIN.BIN_ID=DB.config.binId;localStorage.setItem('lp_bin',DB.config.binId);}
-        if(DB.config?.binApiKey){JSONBIN.API_KEY=DB.config.binApiKey;localStorage.setItem('lp_key',DB.config.binApiKey);}
-      }
+    if(!r.ok){
+      console.warn('[LexPrep] JSONBin load HTTP',r.status);
+      _dbLoaded=true;return;
     }
-  }catch(e){console.warn('JSONBin load:',e.message);}
+    const data=await r.json();
+    if(data&&data.record&&typeof data.record==='object'){
+      DB=_mergeDB(data.record);
+      // Sync Gemini key into STATE immediately so all devices get it
+      if(DB.config.geminiKey)STATE.geminiKey=DB.config.geminiKey;
+      // Persist bin credentials from DB into localStorage (cross-device bootstrap)
+      if(DB.config.binId&&DB.config.binId!=='TU_BIN_ID_AQUI'){
+        JSONBIN.BIN_ID=DB.config.binId;
+        localStorage.setItem('lp_bin',DB.config.binId);
+      }
+      if(DB.config.binApiKey&&DB.config.binApiKey!=='TU_API_KEY_AQUI'){
+        JSONBIN.API_KEY=DB.config.binApiKey;
+        localStorage.setItem('lp_key',DB.config.binApiKey);
+      }
+      console.log('[LexPrep] DB loaded from JSONBin. Users:',DB.users.length);
+    }
+  }catch(e){
+    console.warn('[LexPrep] JSONBin load error:',e.message);
+  }
+  _dbLoaded=true;
 }
+
 async function dbSave(){
-  if(!JSONBIN.BIN_ID||JSONBIN.BIN_ID==='TU_BIN_ID_AQUI')return;
-  try{
-    await fetch(`${JSONBIN.BASE_URL}/${JSONBIN.BIN_ID}`,{
-      method:'PUT',
-      headers:{'Content-Type':'application/json','X-Master-Key':JSONBIN.API_KEY},
-      body:JSON.stringify(DB)
-    });
-  }catch(e){console.warn('JSONBin save:',e.message);}
+  if(!_hasBinConfig()){
+    console.warn('[LexPrep] dbSave skipped — no JSONBin config');
+    return;
+  }
+  // Serialise current save in a chain to avoid race conditions
+  _savePromise=(_savePromise||Promise.resolve()).then(async()=>{
+    try{
+      const payload=JSON.parse(JSON.stringify(DB)); // deep clone to avoid mutation during stringify
+      const r=await fetch(`${JSONBIN.BASE_URL}/${JSONBIN.BIN_ID}`,{
+        method:'PUT',
+        headers:{'Content-Type':'application/json','X-Master-Key':JSONBIN.API_KEY},
+        body:JSON.stringify(payload)
+      });
+      if(!r.ok)console.warn('[LexPrep] JSONBin save HTTP',r.status);
+      else console.log('[LexPrep] DB saved to JSONBin.');
+    }catch(e){
+      console.warn('[LexPrep] JSONBin save error:',e.message);
+    }
+  });
+  return _savePromise;
 }
+
 function saveUserProgress(){
   if(!STATE.currentUser)return;
   const u=DB.users.find(u=>u.id===STATE.currentUser.id);
-  if(u){u.xp=STATE.xp;u.streak=STATE.streak;u.totalQ=STATE.totalQuestions;u.correctQ=STATE.correctAnswers;u.progress=calcOverallProgress();dbSave();}
+  if(!u)return;
+  u.xp=STATE.xp||0;
+  u.streak=STATE.streak||0;
+  u.totalQ=STATE.totalQuestions||0;
+  u.correctQ=STATE.correctAnswers||0;
+  u.progress=calcOverallProgress();
+  u.subjectProgress={...STATE.subjectProgress};
+  // Update STATE.currentUser reference too so UI is consistent
+  STATE.currentUser.xp=u.xp;
+  STATE.currentUser.streak=u.streak;
+  STATE.currentUser.totalQ=u.totalQ;
+  STATE.currentUser.correctQ=u.correctQ;
+  STATE.currentUser.progress=u.progress;
+  STATE.currentUser.subjectProgress=u.subjectProgress;
+  dbSave();
+  saveSession();
 }
+
 function calcOverallProgress(){
-  const vals=Object.values(STATE.subjectProgress);
-  if(!vals.length)return STATE.currentUser?.progress||0;
+  const vals=Object.values(STATE.subjectProgress||{}).filter(v=>typeof v==='number');
+  if(!vals.length)return Math.max(0,Math.min(100,STATE.currentUser?.progress||0));
   return Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
+}
+
+// Safe number helper — prevents NaN/undefined in render
+function safeNum(v,fallback=0){
+  const n=Number(v);return isNaN(n)?fallback:n;
 }
 
 // ============================================================
@@ -1064,16 +1159,25 @@ async function doLogin(){
   const pass=document.getElementById('login-pass').value;
   hideError('login-error');
   if(!email||!pass){showError('login-error','Completa todos los campos.');return;}
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){showError('login-error','Ingresa un correo electrónico válido.');return;}
   const btn=document.getElementById('btn-login');
   btn.textContent='Verificando…';btn.disabled=true;
-  await dbLoad();
+  try{
+    await dbLoad(); // always load fresh before auth to prevent stale user list
+  }catch(e){console.warn('[LexPrep] pre-login dbLoad error',e);}
   btn.textContent='Ingresar a LexPrep →';btn.disabled=false;
   const user=DB.users.find(u=>u.email.toLowerCase()===email&&u.pass===pass);
-  if(!user){showError('login-error','Credenciales incorrectas.');return;}
+  if(!user){showError('login-error','Credenciales incorrectas. Verifica tu correo y contraseña.');return;}
   if(user.status==='inactive'){showError('login-error','Cuenta desactivada. Contacta al administrador.');return;}
+  // Hydrate STATE from DB user record (never NaN)
   STATE.currentUser=user;STATE.isAdmin=false;
-  STATE.xp=user.xp||0;STATE.streak=user.streak||0;
-  STATE.totalQuestions=user.totalQ||0;STATE.correctAnswers=user.correctQ||0;
+  STATE.xp=safeNum(user.xp,0);
+  STATE.streak=safeNum(user.streak,0);
+  STATE.totalQuestions=safeNum(user.totalQ,0);
+  STATE.correctAnswers=safeNum(user.correctQ,0);
+  STATE.subjectProgress=user.subjectProgress&&typeof user.subjectProgress==='object'?{...user.subjectProgress}:{};
+  STATE.simResults=Array.isArray(user.simResults)?user.simResults:[];
+  STATE.quizHistory=Array.isArray(user.quizHistory)?user.quizHistory:[];
   STATE.geminiKey=DB.config.geminiKey||'';
   if(user.examDate)STATE.examDate=new Date(user.examDate);
   enterApp();
@@ -1087,15 +1191,41 @@ async function doRegister(){
   const date=document.getElementById('reg-date').value;
   hideError('register-error');hideError('register-success');
   if(!name||!email||!pass){showError('register-error','Completa nombre, correo y contraseña.');return;}
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){showError('register-error','Ingresa un correo electrónico válido.');return;}
   if(pass.length<6){showError('register-error','La contraseña debe tener mínimo 6 caracteres.');return;}
+  // Basic XSS sanitisation
+  const safeName=name.replace(/[<>]/g,'').slice(0,100);
+  const safeEmail=email.slice(0,200);
   const btn=document.getElementById('btn-register');
   btn.textContent='Creando cuenta…';btn.disabled=true;
-  await dbLoad();
-  if(DB.users.find(u=>u.email.toLowerCase()===email)){btn.textContent='Crear mi cuenta →';btn.disabled=false;showError('register-error','Correo ya registrado. Inicia sesión.');return;}
-  const nu={id:Date.now(),name,email,pass,uni,joined:new Date().toISOString().split('T')[0],progress:0,status:'active',plan:'free',xp:0,streak:0,totalQ:0,correctQ:0};
-  DB.users.push(nu);await dbSave();
+  try{await dbLoad();}catch(e){console.warn('[LexPrep] pre-register dbLoad error',e);}
+  if(DB.users.find(u=>u.email.toLowerCase()===safeEmail)){
+    btn.textContent='Crear mi cuenta →';btn.disabled=false;
+    showError('register-error','Correo ya registrado. Inicia sesión.');return;
+  }
+  // Robust new user object — all metrics at 0, no undefined/NaN
+  const nu={
+    id:Date.now(),
+    name:safeName,
+    email:safeEmail,
+    pass,
+    uni:uni.slice(0,200)||'',
+    joined:new Date().toISOString().split('T')[0],
+    progress:0,status:'active',plan:'free',
+    xp:0,streak:0,totalQ:0,correctQ:0,
+    subjectProgress:{},
+    simResults:[],
+    quizHistory:[],
+    examDate:date||''
+  };
+  DB.users.push(nu);
+  try{await dbSave();}catch(e){console.warn('[LexPrep] post-register dbSave error',e);}
+  // Init STATE from new user — all zeroes, no random fake progress
+  STATE.currentUser=nu;STATE.isAdmin=false;
+  STATE.xp=0;STATE.streak=0;STATE.totalQuestions=0;STATE.correctAnswers=0;
+  STATE.subjectProgress={};STATE.simResults=[];STATE.quizHistory=[];
+  STATE.geminiKey=DB.config.geminiKey||'';
   if(date)STATE.examDate=new Date(date);
-  STATE.currentUser=nu;STATE.geminiKey=DB.config.geminiKey||'';
   btn.textContent='Crear mi cuenta →';btn.disabled=false;
   enterApp();
 }
@@ -1124,8 +1254,10 @@ function doLogout(){
   document.getElementById('auth-section').classList.remove('hidden');
   document.getElementById('app-section').classList.add('hidden');
   document.getElementById('admin-section').classList.add('hidden');
+  // Reset password fields and their toggle state
+  const lp=document.getElementById('login-pass');if(lp){lp.value='';lp.type='password';}
+  const rp=document.getElementById('reg-pass');if(rp){rp.value='';rp.type='password';}
   document.getElementById('login-email').value='';
-  document.getElementById('login-pass').value='';
   showScreen('login');
 }
 
@@ -1133,17 +1265,24 @@ function enterApp(){
   document.getElementById('auth-section').classList.add('hidden');
   document.getElementById('app-section').classList.remove('hidden');
   const u=STATE.currentUser;
-  const initials=u.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase();
-  document.getElementById('user-name-sidebar').textContent=u.name.split(' ').slice(0,2).join(' ');
+  const initials=(u.name||'U').split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()||'US';
+  document.getElementById('user-name-sidebar').textContent=(u.name||'Estudiante').split(' ').slice(0,2).join(' ');
   document.getElementById('user-avatar-sidebar').textContent=initials;
-  document.getElementById('user-role-sidebar').textContent=`Plan ${u.plan.charAt(0).toUpperCase()+u.plan.slice(1)}`;
+  document.getElementById('user-role-sidebar').textContent=`Plan ${(u.plan||'free').charAt(0).toUpperCase()+(u.plan||'free').slice(1)}`;
   updateHeader();
-  SUBJECTS.forEach(s=>{if(!STATE.subjectProgress[s.id])STATE.subjectProgress[s.id]=Math.floor(Math.random()*40)+30;});
+  // Initialize subjectProgress only for subjects that don't have a value yet.
+  // NEW USERS get 0 (not random), RETURNING users keep their saved progress.
+  SUBJECTS.forEach(s=>{
+    if(STATE.subjectProgress[s.id]===undefined||STATE.subjectProgress[s.id]===null){
+      STATE.subjectProgress[s.id]=0;
+    }
+  });
   // Load extra subjects from DB config
   if(DB.config.extraSubjects?.length){
     DB.config.extraSubjects.forEach(s=>{
-      if(!SUBJECTS.find(x=>x.id==='custom_'+s.name))
-        SUBJECTS.push({id:'custom_'+s.name,name:s.name,color:'var(--gold)',desc:s.desc||''});
+      const customId='custom_'+s.name;
+      if(!SUBJECTS.find(x=>x.id===customId))
+        SUBJECTS.push({id:customId,name:s.name,color:'var(--gold)',desc:s.desc||''});
     });
   }
   saveSession();resetInactivityTimer();navigate('dashboard');
@@ -1208,9 +1347,9 @@ function renderDashboard(el){
         <div class="stat-change" style="color:var(--blue-jur)">Actualizado ahora</div>
       </div>
       <div class="stat-card green">
-        <div class="stat-value" style="color:var(--green)">${STATE.totalQuestions}</div>
+        <div class="stat-value" style="color:var(--green)">${safeNum(STATE.totalQuestions)}</div>
         <div class="stat-label">Preguntas resueltas</div>
-        <div class="stat-change">${STATE.correctAnswers} correctas (${STATE.totalQuestions?Math.round(STATE.correctAnswers/STATE.totalQuestions*100):0}%)</div>
+        <div class="stat-change">${safeNum(STATE.correctAnswers)} correctas (${STATE.totalQuestions?Math.round(safeNum(STATE.correctAnswers)/safeNum(STATE.totalQuestions,1)*100):0}%)</div>
       </div>
       <div class="stat-card purple">
         <div class="stat-value" style="color:var(--purple)">${STATE.streak}</div>
@@ -1227,7 +1366,7 @@ function renderDashboard(el){
         <div class="card">
           <div style="display:flex;flex-direction:column;gap:12px">
             ${SUBJECTS.slice(0,10).map(s=>{
-              const pct=STATE.subjectProgress[s.id]||0;
+              const pct=safeNum(STATE.subjectProgress[s.id],0);
               return `<div>
                 <div class="flex justify-between mb-1">
                   <span class="text-sm">${s.name}</span>
@@ -1525,10 +1664,15 @@ function quizSelectOption(index,subjectId,subjectName){
   STATE.totalQuestions++;
   const q=STATE.quizState.caseSet.questions[STATE.quizState.currentQ];
   const correct=index===q.correct;
+  const subj=STATE.quizState.caseSet.subject;
   if(correct){
     STATE.correctAnswers++;STATE.xp+=50;
-    if(!STATE.subjectProgress[STATE.quizState.caseSet.subject])STATE.subjectProgress[STATE.quizState.caseSet.subject]=50;
-    STATE.subjectProgress[STATE.quizState.caseSet.subject]=Math.min(100,STATE.subjectProgress[STATE.quizState.caseSet.subject]+2);
+    // Initialize to 0 if missing, then add 2 (works for brand-new users)
+    if(STATE.subjectProgress[subj]===undefined||STATE.subjectProgress[subj]===null)STATE.subjectProgress[subj]=0;
+    STATE.subjectProgress[subj]=Math.min(100,safeNum(STATE.subjectProgress[subj],0)+2);
+  }else{
+    // Wrong answer still initialises the subject in progress map
+    if(STATE.subjectProgress[subj]===undefined||STATE.subjectProgress[subj]===null)STATE.subjectProgress[subj]=0;
   }
   if(!STATE.quizHistory)STATE.quizHistory=[];
   STATE.quizHistory.push({subject:STATE.quizState.caseSet.subjectName,question:q.text,correct});
@@ -1712,6 +1856,9 @@ function finishSimulator(){
   };
   STATE.simResults.push(simResult);
   STATE.xp+=correct*80;STATE.totalQuestions+=questions.length;STATE.correctAnswers+=correct;
+  // Persist simResults in the DB user record too
+  const _u=DB.users.find(u=>u.id===STATE.currentUser?.id);
+  if(_u){_u.simResults=STATE.simResults;}
   updateHeader();saveUserProgress();
   renderSimulatorResults(document.getElementById('page-simulator'),simResult,pct>=60);
 }
@@ -1920,7 +2067,7 @@ function fcAction(action){
 // ============================================================
 function renderPlanner(el){
   const daysLeft=Math.max(1,Math.ceil((STATE.examDate-new Date())/86400000));
-  const weakSubjects=SUBJECTS.filter(s=>(STATE.subjectProgress[s.id]||50)<60);
+  const weakSubjects=SUBJECTS.filter(s=>safeNum(STATE.subjectProgress[s.id],0)<60);
   const schedule=[
     {time:'7:00–8:00 AM',subject:'Derecho Constitucional',type:'Teoría',done:true},
     {time:'8:00–9:00 AM',subject:'Flashcards — Bloque de constitucionalidad',type:'Memorización',done:true},
@@ -1956,7 +2103,7 @@ function renderPlanner(el){
       <div style="display:flex;flex-direction:column;gap:10px">
         <div class="card">
           <div class="card-title">Progreso por materia</div>
-          ${SUBJECTS.map(s=>{const p=STATE.subjectProgress[s.id]||50;return`<div class="flex items-center gap-3 mb-3">
+          ${SUBJECTS.map(s=>{const p=safeNum(STATE.subjectProgress[s.id],0);return`<div class="flex items-center gap-3 mb-3">
             <div class="flex-1"><div class="text-xs text-muted mb-1">${s.name}</div><div class="progress-bar" style="height:4px"><div class="progress-fill ${p>=100?'green':p>50?'gold':'blue'}" style="width:${Math.max(5,p)}%"></div></div></div>
             <div style="font-size:11px;color:${p>=60?'var(--green)':'var(--amber)'};width:26px;text-align:right">${p}%</div>
           </div>`;}).join('')}
@@ -2100,14 +2247,14 @@ function renderAnalytics(el){
         <div class="divider"></div>
         <div class="flex items-center justify-between">
           <div class="text-sm text-secondary">Tasa de acierto</div>
-          <div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:var(--gold)">${STATE.totalQuestions?Math.round(STATE.correctAnswers/STATE.totalQuestions*100):0}%</div>
+          <div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:var(--gold)">${safeNum(STATE.totalQuestions)?Math.round(safeNum(STATE.correctAnswers)/safeNum(STATE.totalQuestions,1)*100):0}%</div>
         </div>
       </div>
     </div>
     <div class="section-title">Rendimiento por materia</div>
     <div class="card mb-6">
       <div style="display:flex;flex-direction:column;gap:11px">
-        ${SUBJECTS.map(s=>{const p=STATE.subjectProgress[s.id]||50;return`<div style="display:flex;align-items:center;gap:9px">
+        ${SUBJECTS.map(s=>{const p=safeNum(STATE.subjectProgress[s.id],0);return`<div style="display:flex;align-items:center;gap:9px">
           <div style="width:150px;font-size:13px;color:var(--text-secondary)">${s.name}</div>
           <div style="flex:1;background:rgba(255,255,255,.05);border-radius:100px;overflow:hidden;height:7px"><div style="height:100%;width:${p}%;background:${p>=60?'var(--green)':p>=40?'var(--amber)':'var(--red)'};border-radius:100px"></div></div>
           <div style="width:36px;font-size:12px;font-weight:600;font-family:'DM Mono',monospace;color:${p>=60?'var(--green)':p>=40?'var(--amber)':'var(--red)'}">${p}%</div>
@@ -2372,8 +2519,13 @@ function renderAdminConfig(el){
 async function saveAdminGeminiKey(){
   const key=document.getElementById('admin-gemini-key')?.value?.trim();
   if(!key){alert('Ingresa una API key válida.');return;}
-  DB.config.geminiKey=key;STATE.geminiKey=key;await dbSave();
-  alert('API key de Google AI guardada globalmente. Todos los estudiantes podrán usar la IA.');
+  DB.config.geminiKey=key;STATE.geminiKey=key;
+  try{
+    await dbSave();
+    alert('API key de Google AI guardada globalmente ✓\n\nTodos los estudiantes podrán usar la IA desde cualquier dispositivo.');
+  }catch(e){
+    alert('Error al guardar: '+e.message);
+  }
 }
 async function testAdminKey(){
   const key=document.getElementById('admin-gemini-key')?.value?.trim();
@@ -2407,8 +2559,12 @@ async function saveAdminJsonbin(){
   localStorage.setItem('lp_bin',binId);localStorage.setItem('lp_key',apiKey);
   // Store in DB.config so any device loading the bin gets the credentials
   DB.config.binId=binId;DB.config.binApiKey=apiKey;
-  await dbSave();
-  alert('JSONBin configurado. Los datos persisten en la nube y son accesibles desde cualquier dispositivo (móvil, tablet, PC).');
+  try{
+    await dbSave();
+    alert('JSONBin configurado ✓\n\nLos datos persisten en la nube y son accesibles desde cualquier dispositivo (móvil, tablet, PC).\n\nLos estudiantes que inicien sesión en otro dispositivo cargarán la API key de IA automáticamente.');
+  }catch(e){
+    alert('Error al guardar en JSONBin: '+e.message);
+  }
 }
 function renderAdminContent(el){
   const extraSubjects=DB.config.extraSubjects||[];
@@ -2491,6 +2647,9 @@ function attachListeners(){
   document.getElementById('link-to-admin')?.addEventListener('click',()=>showScreen('admin-login'));
   document.getElementById('link-to-login')?.addEventListener('click',()=>showScreen('login'));
   document.getElementById('link-admin-back')?.addEventListener('click',()=>showScreen('login'));
+  // Password toggles (login + register)
+  document.getElementById('toggle-login-pass')?.addEventListener('click',()=>_togglePass('login-pass','eye-login'));
+  document.getElementById('toggle-reg-pass')?.addEventListener('click',()=>_togglePass('reg-pass','eye-reg'));
   // App nav
   document.querySelectorAll('[data-page]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.page)));
   document.getElementById('user-card-btn')?.addEventListener('click',()=>navigate('settings'));
@@ -2502,6 +2661,21 @@ function attachListeners(){
   document.getElementById('btn-admin-logout')?.addEventListener('click',doLogout);
 }
 
+// Toggle password visibility — works on iOS Safari, Android Chrome, Firefox
+function _togglePass(inputId,iconId){
+  const inp=document.getElementById(inputId);
+  const icon=document.getElementById(iconId);
+  if(!inp)return;
+  const show=inp.type==='password';
+  inp.type=show?'text':'password';
+  // Swap icon: open eye ↔ closed eye
+  if(icon){
+    icon.innerHTML=show
+      ? /* eye-off */'<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+      : /* eye-open */'<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+  }
+}
+
 // ============================================================
 // INIT — flash prevention + session restore
 // ============================================================
@@ -2509,45 +2683,46 @@ function attachListeners(){
   // Hide everything until ready
   document.body.classList.remove('app-ready');
   attachListeners();
-  // Load JSONBin credentials from localStorage
+  // Load JSONBin credentials from localStorage first
   const savedBin=localStorage.getItem('lp_bin');
   const savedKey=localStorage.getItem('lp_key');
-  if(savedBin)JSONBIN.BIN_ID=savedBin;
-  if(savedKey)JSONBIN.API_KEY=savedKey;
-  // Load remote DB
+  if(savedBin&&savedBin!=='TU_BIN_ID_AQUI')JSONBIN.BIN_ID=savedBin;
+  if(savedKey&&savedKey!=='TU_API_KEY_AQUI')JSONBIN.API_KEY=savedKey;
+  // Always load remote DB BEFORE rendering anything (fixes cross-device config)
   await dbLoad();
+  // Always sync geminiKey from DB into STATE after load
+  if(DB.config.geminiKey)STATE.geminiKey=DB.config.geminiKey;
   // Try to restore session
   const session=loadSession();
+  const _show=()=>{
+    document.body.classList.add('app-ready');
+    document.getElementById('init-loader')?.classList.add('gone');
+  };
   if(session){
     if(session.isAdmin){
-      STATE.isAdmin=true;
-      document.body.classList.add('app-ready');
-      document.getElementById('init-loader')?.classList.add('gone');
-      enterAdminPanel();return;
+      STATE.isAdmin=true;_show();enterAdminPanel();return;
     }
     const user=DB.users.find(u=>u.id===session.userId);
     if(user&&user.status==='active'){
       STATE.currentUser=user;STATE.isAdmin=false;
-      STATE.xp=session.xp??user.xp??0;
-      STATE.streak=session.streak??user.streak??0;
-      STATE.totalQuestions=session.totalQuestions??user.totalQ??0;
-      STATE.correctAnswers=session.correctAnswers??user.correctQ??0;
-      STATE.subjectProgress=session.subjectProgress??{};
-      STATE.simResults=session.simResults??[];
-      STATE.quizHistory=session.quizHistory??[];
+      // Prefer DB values (most up-to-date), fall back to session, then 0
+      STATE.xp=safeNum(user.xp??session.xp,0);
+      STATE.streak=safeNum(user.streak??session.streak,0);
+      STATE.totalQuestions=safeNum(user.totalQ??session.totalQuestions,0);
+      STATE.correctAnswers=safeNum(user.correctQ??session.correctAnswers,0);
+      // subjectProgress: merge DB (authoritative) with session (may have newer data)
+      STATE.subjectProgress={...(user.subjectProgress||{}),(session.subjectProgress||{})};
+      STATE.simResults=Array.isArray(session.simResults)?session.simResults:(Array.isArray(user.simResults)?user.simResults:[]);
+      STATE.quizHistory=Array.isArray(session.quizHistory)?session.quizHistory:[];
       STATE.geminiKey=DB.config.geminiKey||'';
       if(session.examDate)STATE.examDate=new Date(session.examDate);
       else if(user.examDate)STATE.examDate=new Date(user.examDate);
-      document.body.classList.add('app-ready');
-      document.getElementById('init-loader')?.classList.add('gone');
-      enterApp();return;
+      _show();enterApp();return;
     }
     clearSession();
   }
   // No session → show login
-  document.body.classList.add('app-ready');
-  document.getElementById('init-loader')?.classList.add('gone');
-  showScreen('login');
+  _show();showScreen('login');
 })();
 </script>
 </body>
