@@ -849,13 +849,16 @@ let inactivityTimer=null, inactivityWarnTimer=null;
 
 function saveSession(){
   if(!STATE.currentUser&&!STATE.isAdmin)return;
+  // Keep lp_gkey always fresh
+  const gk=STATE.geminiKey||DB.config.geminiKey||'';
+  if(gk)localStorage.setItem('lp_gkey',gk);
   localStorage.setItem(SESSION_KEY,JSON.stringify({
     isAdmin:STATE.isAdmin, userId:STATE.currentUser?.id||null,
     xp:STATE.xp, streak:STATE.streak, totalQuestions:STATE.totalQuestions,
     correctAnswers:STATE.correctAnswers, subjectProgress:STATE.subjectProgress,
     simResults:STATE.simResults, examDate:STATE.examDate.toISOString(),
     quizHistory:STATE.quizHistory,
-    geminiKey:STATE.geminiKey||DB.config.geminiKey||'',
+    geminiKey:STATE.geminiKey||DB.config.geminiKey||localStorage.getItem('lp_gkey')||'',
     binId:JSONBIN.BIN_ID, binApiKey:JSONBIN.API_KEY,
     ts:Date.now()
   }));
@@ -1273,7 +1276,8 @@ async function doLogin(){
   STATE.subjectProgress=user.subjectProgress&&typeof user.subjectProgress==='object'?{...user.subjectProgress}:{};
   STATE.simResults=Array.isArray(user.simResults)?user.simResults:[];
   STATE.quizHistory=Array.isArray(user.quizHistory)?user.quizHistory:[];
-  STATE.geminiKey=DB.config.geminiKey||'';
+  STATE.geminiKey=DB.config.geminiKey||localStorage.getItem('lp_gkey')||'';
+  if(STATE.geminiKey)localStorage.setItem('lp_gkey',STATE.geminiKey);
   if(user.examDate)STATE.examDate=new Date(user.examDate);
   enterApp();
 }
@@ -1319,7 +1323,8 @@ async function doRegister(){
   STATE.currentUser=nu;STATE.isAdmin=false;
   STATE.xp=0;STATE.streak=0;STATE.totalQuestions=0;STATE.correctAnswers=0;
   STATE.subjectProgress={};STATE.simResults=[];STATE.quizHistory=[];
-  STATE.geminiKey=DB.config.geminiKey||'';
+  STATE.geminiKey=DB.config.geminiKey||localStorage.getItem('lp_gkey')||'';
+  if(STATE.geminiKey)localStorage.setItem('lp_gkey',STATE.geminiKey);
   if(date)STATE.examDate=new Date(date);
   btn.textContent='Crear mi cuenta →';btn.disabled=false;
   enterApp();
@@ -1679,7 +1684,14 @@ RESPONDE ÚNICAMENTE con el JSON a continuación. Sin texto antes ni después. S
     <div class="card" style="text-align:center;padding:36px">
     <div class="font-serif text-lg font-700 mb-2">Error al generar caso</div>
     <div class="text-secondary text-sm mb-4">${err.message}</div>
-    ${needsKey?'<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:11px;font-size:13px;color:var(--amber);margin-bottom:14px">El administrador debe ingresar la API key de Google AI en el panel de administración.</div>':''}
+    ${needsKey?`<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:11px;font-size:13px;color:var(--amber);margin-bottom:14px">
+      La API key de Google AI no está disponible en este dispositivo.<br>
+      <strong>Solución:</strong> Cierra sesión, vuelve a ingresar, y el sistema la cargará automáticamente desde la nube.
+      <br><br>
+      <button onclick="(async()=>{await dbLoad();if(DB.config.geminiKey){STATE.geminiKey=DB.config.geminiKey;localStorage.setItem('lp_gkey',DB.config.geminiKey);location.reload();}else{alert('Sin conexión a la nube. Verifica tu internet e intenta de nuevo.');}})()" style="background:var(--amber);border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;color:#1a1000;cursor:pointer;margin-top:4px">
+        🔄 Recargar configuración
+      </button>
+    </div>`:''}
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
       <button id="btn-retry-quiz" style="background:var(--gold-dim);border:1px solid var(--gold-border);border-radius:8px;padding:10px 22px;font-size:13px;font-weight:600;color:var(--gold);cursor:pointer">Reintentar con IA</button>
       <button id="btn-local-quiz" style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:10px 22px;font-size:13px;color:var(--text-secondary);cursor:pointer">Usar caso del banco local</button>
@@ -2701,6 +2713,8 @@ async function saveAdminGeminiKey(){
   const key=document.getElementById('admin-gemini-key')?.value?.trim();
   if(!key){alert('Ingresa una API key válida.');return;}
   DB.config.geminiKey=key;STATE.geminiKey=key;
+  // Also persist to dedicated localStorage so all devices get it after first JSONBin sync
+  localStorage.setItem('lp_gkey',key);
   try{
     await dbSave();
     alert('API key de Google AI guardada globalmente ✓\n\nTodos los estudiantes podrán usar la IA desde cualquier dispositivo.');
@@ -3301,12 +3315,16 @@ function _togglePass(inputId,iconId){
   const savedKey=localStorage.getItem('lp_key');
   if(savedBin&&savedBin!=='TU_BIN_ID_AQUI')JSONBIN.BIN_ID=savedBin;
   if(savedKey&&savedKey!=='TU_API_KEY_AQUI')JSONBIN.API_KEY=savedKey;
-  // Pre-restore session to get credentials BEFORE dbLoad
+  // Pre-restore credentials BEFORE dbLoad (mobile first-open fix)
   try{
+    // 1. Dedicated geminiKey store (fastest, most reliable)
+    const savedGkey=localStorage.getItem('lp_gkey');
+    if(savedGkey){STATE.geminiKey=savedGkey;DB.config.geminiKey=savedGkey;}
+    // 2. Session-embedded credentials
     const preSession=JSON.parse(localStorage.getItem(SESSION_KEY)||'{}');
     if(preSession.binId&&preSession.binId!=='TU_BIN_ID_AQUI'){JSONBIN.BIN_ID=preSession.binId;localStorage.setItem('lp_bin',preSession.binId);}
     if(preSession.binApiKey&&preSession.binApiKey!=='TU_API_KEY_AQUI'){JSONBIN.API_KEY=preSession.binApiKey;localStorage.setItem('lp_key',preSession.binApiKey);}
-    if(preSession.geminiKey){STATE.geminiKey=preSession.geminiKey;DB.config.geminiKey=preSession.geminiKey;}
+    if(preSession.geminiKey&&!STATE.geminiKey){STATE.geminiKey=preSession.geminiKey;DB.config.geminiKey=preSession.geminiKey;}
   }catch(e){}
   // Always load remote DB BEFORE rendering anything (fixes cross-device config)
   await dbLoad();
@@ -3346,8 +3364,9 @@ function _togglePass(inputId,iconId){
       const sessSims=Array.isArray(session.simResults)?session.simResults:[];
       STATE.simResults=sessSims.length>=dbSims.length?sessSims:dbSims;
       STATE.quizHistory=Array.isArray(session.quizHistory)?session.quizHistory:[];
-      // geminiKey: DB config is authoritative; session as fallback for offline
-      STATE.geminiKey=DB.config.geminiKey||session.geminiKey||'';
+      // geminiKey: DB config authoritative; lp_gkey localStorage; session as last fallback
+      STATE.geminiKey=DB.config.geminiKey||localStorage.getItem('lp_gkey')||session.geminiKey||'';
+      if(STATE.geminiKey){localStorage.setItem('lp_gkey',STATE.geminiKey);DB.config.geminiKey=STATE.geminiKey;}
       if(session.examDate)STATE.examDate=new Date(session.examDate);
       else if(user.examDate)STATE.examDate=new Date(user.examDate);
       _show();enterApp();return;
