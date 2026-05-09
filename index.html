@@ -1164,17 +1164,29 @@ const FLASHCARDS_DATA=[
 // gratuitas de Google AI Studio.
 // ============================================================
 
-// Modelo principal y fallbacks en orden de confiabilidad
+// Modelo principal y fallbacks en orden de confiabilidad.
+// IMPORTANTE: gemini-2.5 y gemini-2.0 requieren /v1beta/ en cuentas gratuitas.
+// gemini-1.5-flash usa /v1/ estable y funciona en todos los planes.
 const GEMINI_MODELS = [
-  'gemini-2.5-flash',        // mismo que servidor.py — más capaz
-  'gemini-2.0-flash',        // muy estable en cuentas gratuitas
-  'gemini-2.0-flash-lite',   // más rápido, límite alto
-  'gemini-1.5-flash-latest', // el más probado y confiable
+  'gemini-2.5-flash-preview-05-20', // experimental — requiere v1beta
+  'gemini-2.5-flash',               // experimental — requiere v1beta
+  'gemini-2.0-flash',               // v1beta en cuentas gratuitas
+  'gemini-1.5-flash-latest',        // v1 estable — el más confiable en free tier
+  'gemini-1.5-flash',               // v1 estable — fallback adicional
 ];
 
-// Construye URL igual que servidor.py: /v1/models/{modelo}:generateContent
+// Mapa de modelos que requieren el endpoint /v1beta/ en lugar de /v1/
+const GEMINI_BETA_MODELS = new Set([
+  'gemini-2.5-flash-preview-05-20',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+]);
+
+// Construye URL usando la versión de API correcta para cada modelo
 function buildGeminiUrl(model, key) {
-  return `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${key}`;
+  const apiVersion = GEMINI_BETA_MODELS.has(model) ? 'v1beta' : 'v1';
+  return `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${key}`;
 }
 
 // extraerJSON — mismo algoritmo que extraer_json() del servidor.py
@@ -1219,9 +1231,15 @@ function extraerJSON(texto){
 //   5. Si todos fallan por cuota → mensaje claro de espera
 async function geminiCall(prompt, genConfig={}) {
   // Obtener key desde todas las fuentes posibles (igual que servidor.py carga desde config.txt)
+  // Prioridad: STATE > DB.config (Firebase) > localStorage
   const key = STATE.geminiKey || DB.config.geminiKey || localStorage.getItem('lp_gkey') || '';
   if (!key) {
-    throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel de administración.');
+    throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel de administración → Configuración.');
+  }
+
+  // Validación básica del formato de la key (debe empezar con AIza)
+  if (!key.startsWith('AIza') || key.length < 30) {
+    throw new Error(`API key con formato inválido (recibida: "${key.slice(0,8)}…"). Debe empezar con "AIza". Verifica en aistudio.google.com/apikey`);
   }
 
   const cfg = { temperature: 0.8, maxOutputTokens: 8192, ...genConfig };
@@ -1236,7 +1254,7 @@ async function geminiCall(prompt, genConfig={}) {
   for (const model of GEMINI_MODELS) {
     const url = buildGeminiUrl(model, key);
     try {
-      console.log(`[Gemini] Intentando: ${model}`);
+      console.log(`[Gemini] Intentando: ${model} (${url.includes('v1beta') ? 'v1beta' : 'v1'})`);
       const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2869,7 +2887,8 @@ function renderAdminConfig(el){
         Cómo obtener tu API key gratuita:<br>
         1. Ve a <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--blue-jur)">aistudio.google.com/apikey</a><br>
         2. Inicia sesión con Google → "Create API Key"<br>
-        3. Copia la key y pégala arriba → Guardar
+        3. Copia la key (empieza con <code style="color:var(--gold)">AIza</code>) y pégala arriba → Guardar<br>
+        <strong style="color:var(--amber)">⚠ La key se guarda en Firebase y todos los estudiantes la reciben automáticamente.</strong>
       </div>
       <div style="display:flex;gap:9px">
         <button id="btn-save-admin-key" style="background:var(--gold-dim);border:1px solid var(--gold-border);border-radius:8px;padding:9px 18px;font-size:13px;font-weight:600;color:var(--gold);cursor:pointer">Guardar API Key</button>
@@ -2921,24 +2940,32 @@ async function testAdminKey(){
   const resEl=document.getElementById('admin-key-test');
   const btn=document.getElementById('btn-test-admin-key');
   if(!key){if(resEl)resEl.innerHTML='<div style="color:var(--red);font-size:12px">Ingresa una key primero.</div>';return;}
-  if(resEl)resEl.innerHTML='<div style="font-size:12px;color:var(--text-muted)">Probando todos los modelos… <span class="loading-dot"></span><span class="loading-dot"></span></div>';
+  if(!key.startsWith('AIza')||key.length<30){
+    if(resEl)resEl.innerHTML=`<div style="color:var(--red);font-size:12px">⚠ La key parece inválida. Debe empezar con "AIza" y tener al menos 39 caracteres. Cópiala directamente de aistudio.google.com/apikey</div>`;return;
+  }
+  if(resEl)resEl.innerHTML='<div style="font-size:12px;color:var(--text-muted)">Probando todos los modelos (v1 y v1beta)… <span class="loading-dot"></span><span class="loading-dot"></span></div>';
   if(btn){btn.textContent='Probando…';btn.disabled=true;}
-  const body=JSON.stringify({contents:[{parts:[{text:'responde solo: ok'}]}],generationConfig:{maxOutputTokens:5}});
-  let modelOk=null,hit429=false,authError=false;
+  const testBody=JSON.stringify({contents:[{parts:[{text:'responde solo: ok'}]}],generationConfig:{maxOutputTokens:5}});
+  let modelOk=null,apiVerOk=null,hit429=false,authError=false,authMsg='';
   try{
     for(const model of GEMINI_MODELS){
       try{
-        const r=await fetch(buildGeminiUrl(model,key),{method:'POST',headers:{'Content-Type':'application/json'},body});
-        if(r.status===401||r.status===403){authError=true;break;}
+        const url=buildGeminiUrl(model,key);
+        const apiVer=url.includes('v1beta')?'v1beta':'v1';
+        const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:testBody});
+        if(r.status===401||r.status===403){
+          const e=await r.json().catch(()=>({}));
+          authError=true;authMsg=e?.error?.message||`HTTP ${r.status}`;break;
+        }
         if(r.status===404||r.status===400){continue;}
         if(r.status===429){hit429=true;continue;}
-        if(r.ok){modelOk=model;break;}
+        if(r.ok){modelOk=model;apiVerOk=apiVer;break;}
       }catch(netErr){continue;}
     }
     if(authError){
-      if(resEl)resEl.innerHTML='<div style="color:var(--red);font-size:13px;padding:8px 0">❌ API key inválida o sin permisos. Verifica en <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--blue-jur)">aistudio.google.com</a></div>';
+      if(resEl)resEl.innerHTML=`<div style="color:var(--red);font-size:13px;padding:8px 0">❌ API key inválida o sin permisos.<br><span style="font-size:11px;color:var(--text-muted)">${authMsg}</span><br>Verifica en <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--blue-jur)">aistudio.google.com/apikey</a></div>`;
     }else if(modelOk){
-      if(resEl)resEl.innerHTML=`<div style="color:var(--green);font-size:13px;padding:8px 0">✅ Conexión exitosa · Modelo activo: <strong>${modelOk}</strong></div>`;
+      if(resEl)resEl.innerHTML=`<div style="color:var(--green);font-size:13px;padding:8px 0">✅ Conexión exitosa · Modelo: <strong>${modelOk}</strong> · API: <strong>${apiVerOk}</strong></div>`;
     }else if(hit429){
       if(resEl)resEl.innerHTML='<div style="color:var(--amber);font-size:13px;padding:8px 0">⚠️ API key válida pero cuota por minuto al límite. Espera 60 segundos e intenta de nuevo.</div>';
     }else{
