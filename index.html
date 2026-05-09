@@ -1259,12 +1259,11 @@ async function geminiCall(prompt, genConfig={}) {
         continue;
       }
 
-      // Cuota por minuto → esperar 15 s y pasar al siguiente modelo
-      // (igual que servidor.py: si 429 → log + siguiente)
+      // Cuota por minuto → pasar inmediatamente al siguiente modelo
       if (resp.status === 429) {
         ultimoError = 'Cuota por minuto agotada';
-        console.log(`[Gemini] ${model} en cuota (429) → esperando 15 s → siguiente modelo`);
-        await new Promise(r => setTimeout(r, 15000));
+        console.log(`[Gemini] ${model} en cuota (429) → siguiente modelo`);
+        await new Promise(r => setTimeout(r, 1000));
         continue; // probar siguiente modelo sin reintentar este
       }
 
@@ -1770,11 +1769,12 @@ RESPONDE ÚNICAMENTE con el JSON a continuación. Sin texto antes ni después. S
     STATE.quizState={caseSet,currentQ:0,answered:false,selected:null};
     renderCaseQuestion(el,subjectId,subjectName);
   }catch(err){
-    const isQuota=err.message?.includes('429')||err.message?.includes('quota')||err.message?.includes('Cuota');
+    const isQuota=err.message?.includes('429')||err.message?.includes('quota')||err.message?.includes('Cuota')||err.message?.includes('agotada');
     const isJSON=err.message?.includes('JSON')||err.message?.includes('json')||err.message?.includes('parse');
-    const needsKey=err.message?.includes('no configurada');
-    // Para errores de JSON o cuota: usar caso local como fallback silencioso
-    if((isQuota||isJSON)&&!needsKey){
+    const needsKey=err.message?.includes('no configurada')||err.message?.includes('inválida')||err.message?.includes('sin permisos');
+    const isNetwork=err.message?.includes('fetch')||err.message?.includes('network')||err.message?.includes('conectar');
+    // Para errores de JSON, cuota o red: usar caso local como fallback silencioso
+    if((isQuota||isJSON||isNetwork)&&!needsKey){
       const local=SAMPLE_CASES.find(c=>c.subject===subjectId)||SAMPLE_CASES[Math.floor(Math.random()*SAMPLE_CASES.length)];
       STATE.quizState={caseSet:{...local,subjectName},currentQ:0,answered:false,selected:null};
       renderCaseQuestion(el,subjectId,subjectName);
@@ -1790,11 +1790,16 @@ RESPONDE ÚNICAMENTE con el JSON a continuación. Sin texto antes ni después. S
       return;
     }
     // Para errores sin API key o de red: mostrar pantalla de error
+    const friendlyMsg = needsKey
+      ? 'La clave de Google AI no está disponible en este dispositivo.'
+      : isQuota
+      ? 'Los modelos de IA están temporalmente sin disponibilidad. Intenta en 1 minuto.'
+      : 'No se pudo conectar con el servicio de IA. Verifica tu conexión a internet.';
     el.innerHTML=`<div class="page-header"><div class="page-title">Preguntas con IA</div></div>
     <div class="page-body" style="max-width:820px;margin:0 auto">
     <div class="card" style="text-align:center;padding:36px">
     <div class="font-serif text-lg font-700 mb-2">Error al generar caso</div>
-    <div class="text-secondary text-sm mb-4">${err.message}</div>
+    <div class="text-secondary text-sm mb-4">${friendlyMsg}</div>
     ${needsKey?`<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:11px;font-size:13px;color:var(--amber);margin-bottom:14px">
       La API key de Google AI no está disponible en este dispositivo.<br>
       <strong>Solución:</strong> Cierra sesión, vuelve a ingresar, y el sistema la cargará automáticamente desde la nube.
