@@ -1165,28 +1165,19 @@ const FLASHCARDS_DATA=[
 // ============================================================
 
 // Modelo principal y fallbacks en orden de confiabilidad.
-// IMPORTANTE: gemini-2.5 y gemini-2.0 requieren /v1beta/ en cuentas gratuitas.
-// gemini-1.5-flash usa /v1/ estable y funciona en todos los planes.
+// IMPORTANTE: Google AI Studio ahora requiere /v1beta/ para TODOS los modelos
+// con keys nuevas. Se usa v1beta universalmente para máxima compatibilidad.
 const GEMINI_MODELS = [
-  'gemini-2.5-flash-preview-05-20', // experimental — requiere v1beta
-  'gemini-2.5-flash',               // experimental — requiere v1beta
-  'gemini-2.0-flash',               // v1beta en cuentas gratuitas
-  'gemini-1.5-flash-latest',        // v1 estable — el más confiable en free tier
-  'gemini-1.5-flash',               // v1 estable — fallback adicional
+  'gemini-2.5-flash',        // más capaz — igual que servidor.py
+  'gemini-2.5-flash-preview-05-20', // versión preview alternativa
+  'gemini-2.0-flash',        // muy estable
+  'gemini-1.5-flash-latest', // el más probado
+  'gemini-1.5-flash',        // fallback adicional
 ];
 
-// Mapa de modelos que requieren el endpoint /v1beta/ en lugar de /v1/
-const GEMINI_BETA_MODELS = new Set([
-  'gemini-2.5-flash-preview-05-20',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-]);
-
-// Construye URL usando la versión de API correcta para cada modelo
+// Todas las keys nuevas de Google AI Studio usan /v1beta/ universalmente
 function buildGeminiUrl(model, key) {
-  const apiVersion = GEMINI_BETA_MODELS.has(model) ? 'v1beta' : 'v1';
-  return `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${key}`;
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
 }
 
 // extraerJSON — mismo algoritmo que extraer_json() del servidor.py
