@@ -1156,17 +1156,28 @@ const FLASHCARDS_DATA=[
 // ============================================================
 // GEMINI API — multi-endpoint with fallback
 // ============================================================
-// Endpoints ordenados de más reciente a más estable.
-// El protocolo de fallback prueba cada uno automáticamente.
-const GEMINI_ENDPOINTS=[
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent',
+// ============================================================
+// GEMINI API — mismo patrón que servidor.py (un endpoint estable)
+// El servidor.py que funciona usa /v1/models/gemini-2.5-flash
+// con un único fetch y manejo de errores limpio. Aplicamos
+// el mismo patrón aquí para máxima compatibilidad con cuentas
+// gratuitas de Google AI Studio.
+// ============================================================
+
+// Modelo principal y fallbacks en orden de confiabilidad
+const GEMINI_MODELS = [
+  'gemini-2.5-flash',        // mismo que servidor.py — más capaz
+  'gemini-2.0-flash',        // muy estable en cuentas gratuitas
+  'gemini-2.0-flash-lite',   // más rápido, límite alto
+  'gemini-1.5-flash-latest', // el más probado y confiable
 ];
 
+// Construye URL igual que servidor.py: /v1/models/{modelo}:generateContent
+function buildGeminiUrl(model, key) {
+  return `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${key}`;
+}
+
+// extraerJSON — mismo algoritmo que extraer_json() del servidor.py
 function extraerJSON(texto){
   // Paso 1: limpiar bloques de código markdown
   texto=texto.replace(/```json\s*/gi,'').replace(/```\s*/g,'').trim();
@@ -1184,70 +1195,128 @@ function extraerJSON(texto){
     b=b.replace(/"([^"]*)"/g,(_,s)=>'"'+s.replace(/\n/g,'\\n').replace(/\r/g,'').replace(/\t/g,'\\t')+'"');
     try{return JSON.parse(b);}catch{}
   }
-  // Paso 6: JSON truncado — intentar reparar cerrando llaves y corchetes
+  // Paso 6: JSON truncado — intentar reparar cerrando llaves y corchetes (igual que servidor.py)
   if(ini!==-1){
     let b=texto.slice(ini).replace(/,\s*([}\]])/g,'$1').trimEnd();
-    // Detectar string abierto (número impar de comillas sin escapar)
     const q=(b.match(/(?<!\\)"/g)||[]).length;
     if(q%2!==0)b=b.replace(/,?\s*$/,'')+'"';
     b=b.replace(/,\s*$/,'');
     const ll=(b.match(/{/g)||[]).length-(b.match(/}/g)||[]).length;
     const co=(b.match(/\[/g)||[]).length-(b.match(/\]/g)||[]).length;
-    b+=']'.repeat(Math.max(0,co))+'}' .repeat(Math.max(0,ll));
+    b+=']'.repeat(Math.max(0,co))+'}'.repeat(Math.max(0,ll));
     try{return JSON.parse(b);}catch{}
-    // Último intento: limpiar de nuevo tras reparación
     b=b.replace(/,\s*([}\]])/g,'$1');
     try{return JSON.parse(b);}catch{}
   }
   throw new Error('JSON inválido en respuesta IA');
 }
 
-async function geminiCall(prompt,genConfig={}){
-  const key=STATE.geminiKey||DB.config.geminiKey;
-  if(!key)throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel.');
-  const cfg={temperature:.8,maxOutputTokens:8192,...genConfig};
-  const body=JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:cfg});
-  let lastError='Sin respuesta';
-  let hit429=false;
-  for(const baseUrl of GEMINI_ENDPOINTS){
-    const url=`${baseUrl}?key=${key}`;
-    let skipEndpoint=false;
-    for(let attempt=1;attempt<=2;attempt++){
-      try{
-        const resp=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body});
-        if(resp.status===404||resp.status===400){
-          const e=await resp.json().catch(()=>({}));
-          lastError=e.error?.message||`HTTP ${resp.status}`;
-          skipEndpoint=true;break;
-        }
-        if(resp.status===429){
-          hit429=true;lastError='429_quota';
-          if(attempt<2){await new Promise(r=>setTimeout(r,8000));continue;}
-          skipEndpoint=true;break;
-        }
-        if(resp.status===401||resp.status===403){
-          const e=await resp.json().catch(()=>({}));
-          throw new Error('API key inválida: '+(e.error?.message||`HTTP ${resp.status}`));
-        }
-        if(!resp.ok){const e=await resp.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${resp.status}`);}
-        const data=await resp.json();
-        const text=(data.candidates?.[0]?.content?.parts?.[0]?.text||'').replace(/```json|```/g,'').trim();
-        if(!text)throw new Error('Respuesta vacía del modelo');
-        console.log('[LexPrep] IA OK:',baseUrl.match(/models\/([^:]+)/)?.[1]||'?');
-        return text;
-      }catch(err){
-        if(err.name==='TypeError'||err.message.includes('fetch')){lastError=err.message;skipEndpoint=true;break;}
+// geminiCall — mismo patrón que servidor.py:
+//   1. Un solo fetch por modelo
+//   2. 429 → esperar y probar el siguiente modelo (no reintentar el mismo)
+//   3. 400/404 → modelo no disponible → siguiente
+//   4. 401/403 → key inválida → error fatal inmediato
+//   5. Si todos fallan por cuota → mensaje claro de espera
+async function geminiCall(prompt, genConfig={}) {
+  // Obtener key desde todas las fuentes posibles (igual que servidor.py carga desde config.txt)
+  const key = STATE.geminiKey || DB.config.geminiKey || localStorage.getItem('lp_gkey') || '';
+  if (!key) {
+    throw new Error('API key de Google AI no configurada. El administrador debe configurarla en el panel de administración.');
+  }
+
+  const cfg = { temperature: 0.8, maxOutputTokens: 8192, ...genConfig };
+  const body = JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: cfg
+  });
+
+  let ultimoError = 'Sin respuesta del servidor';
+  let todosEnCuota = true; // asume cuota hasta que alguno responda diferente
+
+  for (const model of GEMINI_MODELS) {
+    const url = buildGeminiUrl(model, key);
+    try {
+      console.log(`[Gemini] Intentando: ${model}`);
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body
+      });
+
+      // Key inválida → error fatal (no tiene sentido probar más modelos)
+      if (resp.status === 401 || resp.status === 403) {
+        const e = await resp.json().catch(() => ({}));
+        const msg = e?.error?.message || `HTTP ${resp.status}`;
+        throw new Error(`API key inválida o sin permisos: ${msg}. Verifica en aistudio.google.com/apikey`);
+      }
+
+      // Modelo no disponible en este endpoint → siguiente modelo
+      if (resp.status === 400 || resp.status === 404) {
+        const e = await resp.json().catch(() => ({}));
+        ultimoError = e?.error?.message || `Modelo ${model} no disponible (HTTP ${resp.status})`;
+        todosEnCuota = false; // no es cuota, es disponibilidad
+        console.log(`[Gemini] ${model} no disponible → siguiente`);
+        continue;
+      }
+
+      // Cuota por minuto → esperar 15 s y pasar al siguiente modelo
+      // (igual que servidor.py: si 429 → log + siguiente)
+      if (resp.status === 429) {
+        ultimoError = 'Cuota por minuto agotada';
+        console.log(`[Gemini] ${model} en cuota (429) → esperando 15 s → siguiente modelo`);
+        await new Promise(r => setTimeout(r, 15000));
+        continue; // probar siguiente modelo sin reintentar este
+      }
+
+      // Cualquier otro error HTTP
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({}));
+        ultimoError = e?.error?.message || `HTTP ${resp.status}`;
+        todosEnCuota = false;
+        console.warn(`[Gemini] ${model} error HTTP ${resp.status}:`, ultimoError);
+        continue;
+      }
+
+      // Éxito — mismo parseo que servidor.py
+      const data = await resp.json();
+      const text = (data?.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/```json|```/g, '').trim();
+      if (!text) {
+        const blockReason = data?.promptFeedback?.blockReason || 'desconocido';
+        throw new Error(`Gemini no generó respuesta. Razón: ${blockReason}`);
+      }
+      console.log(`[Gemini] OK → ${model} (${text.length} chars)`);
+      return text;
+
+    } catch (err) {
+      // Re-lanzar errores fatales (key inválida, bloqueo de contenido)
+      if (
+        err.message.includes('inválida') ||
+        err.message.includes('sin permisos') ||
+        err.message.includes('no generó respuesta')
+      ) {
         throw err;
       }
+      // Error de red (fetch failed, timeout, CORS) → siguiente modelo
+      ultimoError = err.message;
+      todosEnCuota = false;
+      console.warn(`[Gemini] ${model} error de red:`, err.message);
+      continue;
     }
-    if(skipEndpoint)continue;
   }
-  // Si todos los endpoints dieron 404/400 (modelos no disponibles), el error real es de conectividad,
-  // no de cuota — aunque alguno haya dado 429 en el camino.
-  const allNotFound=lastError&&(lastError.includes('not found')||lastError.includes('404')||lastError.includes('400'));
-  if(hit429&&!allNotFound)throw new Error('Cuota de IA agotada. Espera 1 minuto e intenta de nuevo.');
-  if(hit429&&allNotFound)throw new Error('Algunos modelos están en cuota y otros no están disponibles. Intenta en 1 minuto.');
-  throw new Error('No se pudo conectar con ningún modelo de IA: '+lastError);
+
+  // Todos los modelos agotados
+  if (todosEnCuota) {
+    throw new Error(
+      'Cuota por minuto agotada en todos los modelos de Google AI. ' +
+      'Espera 1-2 minutos e intenta de nuevo. ' +
+      'Si el problema persiste, verifica tu API key en aistudio.google.com/apikey'
+    );
+  }
+  throw new Error(
+    'No se pudo conectar con ningún modelo de Google AI. ' +
+    'Verifica tu conexión a internet y que la API key sea válida. ' +
+    `Detalle: ${ultimoError}`
+  );
 }
 
 function shuffleOptions(opts,feed){
@@ -2148,37 +2217,50 @@ async function sendMessage(){
   }
   const SYS=`Eres Lex, Tutor Jurídico de IA especializado en el Examen de Estado de Idoneidad para Abogados de Colombia (Ley 1905/2018). Tus conocimientos cubren: Constitucional (CP, CC), Administrativo (CPACA), Civil (C.C., CGP), Familia (Ley 1098/2006), Laboral (CST), Penal (Ley 599/2000, 906/2004), Disciplinario (Ley 1952/2019, 1123/2007), Procesal, Ética y Hermenéutica. Citas normas y jurisprudencia específica. Usas **negritas** para términos clave. Cuando pidan quiz o caso ICFES, lo generas inmediatamente con caso extenso + múltiples preguntas. Responde en español.`;
   try{
-    const key=STATE.geminiKey||DB.config.geminiKey;
+    // Usar geminiCall con multi-turn: inyectar sistema como primer turno
+    const key=STATE.geminiKey||DB.config.geminiKey||localStorage.getItem('lp_gkey')||'';
     if(!key)throw new Error('API key de Google AI no configurada. El administrador debe configurarla.');
-    const geminiMessages=[{role:'user',parts:[{text:SYS+'\n\n---'}]},{role:'model',parts:[{text:'Entendido, listo para ayudarte.'}]}];
-    STATE.chatHistory.slice(-10).forEach(m=>geminiMessages.push({role:m.role==='ai'?'model':'user',parts:[{text:m.text}]}));
-    const body=JSON.stringify({contents:geminiMessages,generationConfig:{temperature:.7,maxOutputTokens:4096}});
+    // Construir historial para Gemini (mismo patrón que servidor.py)
+    const geminiMessages=[
+      {role:'user',parts:[{text:SYS+'\n\n---\nInicio de conversación:'}]},
+      {role:'model',parts:[{text:'Entendido, soy Lex, tu tutor jurídico. ¿En qué te ayudo?'}]}
+    ];
+    STATE.chatHistory.slice(-10).forEach(m=>{
+      geminiMessages.push({role:m.role==='ai'?'model':'user',parts:[{text:m.text}]});
+    });
+    const cfg={temperature:0.7,maxOutputTokens:4096};
+    const body=JSON.stringify({contents:geminiMessages,generationConfig:cfg});
+    // Mismo bucle de modelos que geminiCall pero para multi-turn
     let aiText=null;
-    for(const baseUrl of GEMINI_ENDPOINTS){
-      const url=`${baseUrl}?key=${key}`;
-      let skipEndpoint=false;
-      for(let a=1;a<=2;a++){
-        try{
-          const resp=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body});
-          if(resp.status===404||resp.status===400){skipEndpoint=true;break;}
-          if(resp.status===429){if(a<2){await new Promise(r=>setTimeout(r,8000));continue;}skipEndpoint=true;break;}
-          if(resp.status===401||resp.status===403){const e=await resp.json().catch(()=>({}));throw new Error('API key inválida: '+(e.error?.message||`HTTP ${resp.status}`));}
-          if(!resp.ok){const e=await resp.json().catch(()=>({}));throw new Error('Error '+resp.status+' — '+(e.error?.message||'Verifica la API key'));}
-          const data=await resp.json();
-          aiText=data.candidates?.[0]?.content?.parts?.[0]?.text||'No pude generar respuesta.';
-          console.log('[LexPrep] Tutor OK:',baseUrl.match(/models\/([^:]+)/)?.[1]||'?');
-          break;
-        }catch(err){
-          if(err.name==='TypeError'||err.message.includes('fetch')){skipEndpoint=true;break;}
-          throw err;
+    for(const model of GEMINI_MODELS){
+      const url=buildGeminiUrl(model,key);
+      try{
+        const resp=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body});
+        if(resp.status===401||resp.status===403){
+          const e=await resp.json().catch(()=>({}));
+          throw new Error('API key inválida: '+(e?.error?.message||`HTTP ${resp.status}`));
         }
+        if(resp.status===400||resp.status===404){
+          console.log(`[Tutor] ${model} no disponible → siguiente`);
+          continue;
+        }
+        if(resp.status===429){
+          console.log(`[Tutor] ${model} cuota 429 → esperando 15 s → siguiente`);
+          await new Promise(r=>setTimeout(r,15000));
+          continue;
+        }
+        if(!resp.ok){const e=await resp.json().catch(()=>({}));throw new Error(e?.error?.message||`HTTP ${resp.status}`);}
+        const data=await resp.json();
+        aiText=data?.candidates?.[0]?.content?.parts?.[0]?.text||'No pude generar respuesta.';
+        console.log(`[Tutor] OK → ${model}`);
+        break;
+      }catch(err){
+        if(err.message.includes('inválida')||err.message.includes('sin permisos'))throw err;
+        console.warn(`[Tutor] ${model} error:`,err.message);
+        continue;
       }
-      if(aiText!==null)break;
-      if(skipEndpoint)continue;
     }
-    if(aiText===null){
-      throw new Error('No se pudo conectar con ningún modelo de IA. Verifica que la API key esté activa en Google AI Studio → Panel Admin → Configuración.');
-    }
+    if(aiText===null)throw new Error('Cuota de IA agotada o sin conexión. Espera 1-2 minutos e intenta de nuevo.');
     STATE.chatHistory.push({role:'ai',text:aiText});
   }catch(err){
     STATE.chatHistory.push({role:'ai',text:`**Error:** ${err.message}`});
@@ -2819,13 +2901,13 @@ async function testAdminKey(){
   const body=JSON.stringify({contents:[{parts:[{text:'responde solo: ok'}]}],generationConfig:{maxOutputTokens:5}});
   let modelOk=null,hit429=false,authError=false;
   try{
-    for(const b of GEMINI_ENDPOINTS){
+    for(const model of GEMINI_MODELS){
       try{
-        const r=await fetch(`${b}?key=${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body});
+        const r=await fetch(buildGeminiUrl(model,key),{method:'POST',headers:{'Content-Type':'application/json'},body});
         if(r.status===401||r.status===403){authError=true;break;}
         if(r.status===404||r.status===400){continue;}
         if(r.status===429){hit429=true;continue;}
-        if(r.ok){modelOk=b.match(/models\/([^:]+)/)?.[1]||'Gemini';break;}
+        if(r.ok){modelOk=model;break;}
       }catch(netErr){continue;}
     }
     if(authError){
