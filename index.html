@@ -606,6 +606,26 @@ a{color:inherit;text-decoration:none}
 }
 .reto-code:hover{background:var(--gold-dim)}
 </style>
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+  import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyByo887H2JC4s9RmRlDCrUKuevCrXOmemY",
+    authDomain: "lexprep-e4ca0.firebaseapp.com",
+    projectId: "lexprep-e4ca0",
+    storageBucket: "lexprep-e4ca0.firebasestorage.app",
+    messagingSenderId: "1080527992824",
+    appId: "1:1080527992824:web:f67617c50e6da2a8ed880d"
+  };
+  const _app = initializeApp(firebaseConfig);
+  window._fbAuth = getAuth(_app);
+  window._fbDb = getFirestore(_app);
+  window._fbFns = { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential, doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc, query, orderBy };
+  console.log('[LexPrep] Firebase initialized');
+</script>
 </head>
 <body>
 
@@ -815,13 +835,13 @@ a{color:inherit;text-decoration:none}
 <script>
 'use strict';
 // ============================================================
-// CONFIG — JSONBin (cloud persistence)
+// CONFIG — Firebase (cloud persistence)
 // ============================================================
-const JSONBIN = {
-  BIN_ID: 'TU_BIN_ID_AQUI',
-  API_KEY: 'TU_API_KEY_AQUI',
-  BASE_URL: 'https://api.jsonbin.io/v3/b'
-};
+// Firebase is initialized via the module script above.
+// Helpers to access Firebase from this non-module script:
+function _auth(){ return window._fbAuth; }
+function _db(){ return window._fbDb; }
+function _fns(){ return window._fbFns || {}; }
 
 // ============================================================
 // GLOBAL STATE
@@ -849,17 +869,17 @@ let inactivityTimer=null, inactivityWarnTimer=null;
 
 function saveSession(){
   if(!STATE.currentUser&&!STATE.isAdmin)return;
-  // Keep lp_gkey always fresh
   const gk=STATE.geminiKey||DB.config.geminiKey||'';
   if(gk)localStorage.setItem('lp_gkey',gk);
   localStorage.setItem(SESSION_KEY,JSON.stringify({
-    isAdmin:STATE.isAdmin, userId:STATE.currentUser?.id||null,
+    isAdmin:STATE.isAdmin,
+    userId:STATE.currentUser?.id||null,
+    firebaseUid:STATE.firebaseUid||null,
     xp:STATE.xp, streak:STATE.streak, totalQuestions:STATE.totalQuestions,
     correctAnswers:STATE.correctAnswers, subjectProgress:STATE.subjectProgress,
     simResults:STATE.simResults, examDate:STATE.examDate.toISOString(),
     quizHistory:STATE.quizHistory,
     geminiKey:STATE.geminiKey||DB.config.geminiKey||localStorage.getItem('lp_gkey')||'',
-    binId:JSONBIN.BIN_ID, binApiKey:JSONBIN.API_KEY,
     ts:Date.now()
   }));
 }
@@ -870,18 +890,11 @@ function loadSession(){
     if(!raw)return null;
     const s=JSON.parse(raw);
     if(Date.now()-s.ts>SESSION_TTL){clearSession();return null;}
-    // Bootstrap JSONBin credentials from saved session (cross-device)
-    if(s.binId&&s.binId!=='TU_BIN_ID_AQUI'){
-      JSONBIN.BIN_ID=s.binId;localStorage.setItem('lp_bin',s.binId);
-    }
-    if(s.binApiKey&&s.binApiKey!=='TU_API_KEY_AQUI'){
-      JSONBIN.API_KEY=s.binApiKey;localStorage.setItem('lp_key',s.binApiKey);
-    }
-    // Bootstrap Gemini key from saved session (avoids "not configured" error)
     if(s.geminiKey&&!STATE.geminiKey){
       STATE.geminiKey=s.geminiKey;
       DB.config.geminiKey=s.geminiKey;
     }
+    if(s.firebaseUid)STATE.firebaseUid=s.firebaseUid;
     return s;
   }catch{return null;}
 }
@@ -899,134 +912,136 @@ function resetInactivityTimer(){
   document.addEventListener(e,resetInactivityTimer,{passive:true}));
 
 // ============================================================
-// DB — in-memory defaults (synced with JSONBin)
+// DB — in-memory cache (synced with Firebase Firestore)
 // ============================================================
-const DB_DEFAULTS={
-  users:[
-    {id:1,name:'María Alejandra Gómez',email:'estudiante@lexprep.co',pass:'password123',uni:'U. Nacional',joined:'2025-03-01',progress:50,status:'active',plan:'free',xp:2840,streak:7,totalQ:248,correctQ:154,subjectProgress:{}},
-    {id:2,name:'Carlos Andrés Pérez',email:'carlos@lexprep.co',pass:'pass123',uni:'U. de los Andes',joined:'2025-02-15',progress:78,status:'active',plan:'premium',xp:4200,streak:14,totalQ:390,correctQ:304,subjectProgress:{}},
-    {id:3,name:'Laura Sofía Mora',email:'laura@lexprep.co',pass:'pass123',uni:'U. Javeriana',joined:'2025-04-01',progress:45,status:'active',plan:'free',xp:980,streak:3,totalQ:120,correctQ:54,subjectProgress:{}},
-    {id:1778267078628,name:'Cristian Peñaloza',email:'cristian.penaloza.baron@gmail.com',pass:'lol2025',uni:'Universidad Cooperativa de Colombia',joined:'2026-05-08',progress:49,status:'active',plan:'free',xp:100,streak:0,totalQ:5,correctQ:2,subjectProgress:{}},
-  ],
-  config:{geminiKey:'',adminPass:'admin2025',examDate:'',platformName:'LexPrep',extraSubjects:[],binId:'TU_BIN_ID_AQUI',binApiKey:'TU_API_KEY_AQUI'},
-  simResults:[]
+let DB = {
+  users: [],
+  config: { geminiKey:'', adminPass:'admin2025', platformName:'LexPrep', extraSubjects:[] },
+  simResults: []
 };
-let DB=JSON.parse(JSON.stringify(DB_DEFAULTS));
-
-// Guard: prevent concurrent saves overwriting each other
-let _savePromise=null;
-let _dbLoaded=false;
+let _dbLoaded = false;
+let _saveQueue = Promise.resolve();
+// Track Firebase UID separately from the legacy numeric user id
+STATE.firebaseUid = STATE.firebaseUid || null;
 
 // ============================================================
-// JSONBIN — robust cloud persistence
+// FIREBASE — load global config + all users (admin only)
 // ============================================================
-function _hasBinConfig(){
-  return JSONBIN.BIN_ID&&JSONBIN.BIN_ID!=='TU_BIN_ID_AQUI'&&
-         JSONBIN.API_KEY&&JSONBIN.API_KEY!=='TU_API_KEY_AQUI';
-}
-
-function _mergeDB(remote){
-  // Deep-merge remote into local defaults so new fields always exist
-  const merged={
-    ...DB_DEFAULTS,
-    ...remote,
-    config:{...DB_DEFAULTS.config,...(remote.config||{})},
-    users:Array.isArray(remote.users)&&remote.users.length>0
-      ? remote.users.map(u=>({xp:0,streak:0,totalQ:0,correctQ:0,progress:0,status:'active',plan:'free',subjectProgress:{},...u}))
-      : DB.users,
-    simResults:Array.isArray(remote.simResults)?remote.simResults:[],
-  };
-  return merged;
-}
-
 async function dbLoad(){
-  // 1. Bootstrap credentials: localStorage first, then fallback to compiled defaults
-  const savedBin=localStorage.getItem('lp_bin');
-  const savedKey=localStorage.getItem('lp_key');
-  if(savedBin&&savedBin!=='TU_BIN_ID_AQUI')JSONBIN.BIN_ID=savedBin;
-  if(savedKey&&savedKey!=='TU_API_KEY_AQUI')JSONBIN.API_KEY=savedKey;
+  // Load Gemini key from cached localStorage first (instant, no network)
+  const cachedKey = localStorage.getItem('lp_gkey');
+  if(cachedKey){ STATE.geminiKey = cachedKey; DB.config.geminiKey = cachedKey; }
 
-  if(!_hasBinConfig()){_dbLoaded=true;return;}
-
+  // Load global config from Firestore (works on any device, no credentials needed)
   try{
-    const r=await fetch(`${JSONBIN.BASE_URL}/${JSONBIN.BIN_ID}/latest`,{
-      headers:{'X-Master-Key':JSONBIN.API_KEY,'X-Bin-Meta':'false'},
-      cache:'no-store'
-    });
-    if(!r.ok){
-      console.warn('[LexPrep] JSONBin load HTTP',r.status);
-      _dbLoaded=true;return;
-    }
-    const data=await r.json();
-    if(data&&data.record&&typeof data.record==='object'){
-      DB=_mergeDB(data.record);
-      // Sync Gemini key into STATE immediately so all devices get it
-      if(DB.config.geminiKey)STATE.geminiKey=DB.config.geminiKey;
-      // Persist bin credentials from DB into localStorage (cross-device bootstrap)
-      if(DB.config.binId&&DB.config.binId!=='TU_BIN_ID_AQUI'){
-        JSONBIN.BIN_ID=DB.config.binId;
-        localStorage.setItem('lp_bin',DB.config.binId);
+    const { doc, getDoc } = _fns();
+    const configSnap = await getDoc(doc(_db(), 'config', 'global'));
+    if(configSnap.exists()){
+      const cfg = configSnap.data();
+      DB.config = { ...DB.config, ...cfg };
+      if(cfg.geminiKey){
+        STATE.geminiKey = cfg.geminiKey;
+        localStorage.setItem('lp_gkey', cfg.geminiKey);
       }
-      if(DB.config.binApiKey&&DB.config.binApiKey!=='TU_API_KEY_AQUI'){
-        JSONBIN.API_KEY=DB.config.binApiKey;
-        localStorage.setItem('lp_key',DB.config.binApiKey);
-      }
-      console.log('[LexPrep] DB loaded from JSONBin. Users:',DB.users.length);
+      console.log('[LexPrep] Config loaded from Firebase');
     }
   }catch(e){
-    console.warn('[LexPrep] JSONBin load error:',e.message);
+    console.warn('[LexPrep] Firebase config load error:', e.message);
   }
-  _dbLoaded=true;
+  _dbLoaded = true;
 }
 
-async function dbSave(){
-  if(!_hasBinConfig()){
-    console.warn('[LexPrep] dbSave skipped — no JSONBin config');
-    return;
+// Load a single user's data from Firestore by Firebase UID
+async function dbLoadUser(uid){
+  try{
+    const { doc, getDoc } = _fns();
+    const snap = await getDoc(doc(_db(), 'users', uid));
+    if(snap.exists()) return snap.data();
+  }catch(e){
+    console.warn('[LexPrep] Firebase user load error:', e.message);
   }
-  // Serialise current save in a chain to avoid race conditions
-  _savePromise=(_savePromise||Promise.resolve()).then(async()=>{
+  return null;
+}
+
+// Save current user's data to Firestore
+async function dbSaveUser(uid, data){
+  if(!uid) return;
+  _saveQueue = _saveQueue.then(async()=>{
     try{
-      const payload=JSON.parse(JSON.stringify(DB)); // deep clone to avoid mutation during stringify
-      const r=await fetch(`${JSONBIN.BASE_URL}/${JSONBIN.BIN_ID}`,{
-        method:'PUT',
-        headers:{'Content-Type':'application/json','X-Master-Key':JSONBIN.API_KEY},
-        body:JSON.stringify(payload)
-      });
-      if(!r.ok)console.warn('[LexPrep] JSONBin save HTTP',r.status);
-      else{
-        console.log('[LexPrep] DB saved to JSONBin.');
-        const si=document.getElementById('sync-indicator');
-        if(si){si.style.display='block';si.textContent='☁ Sync OK';si.style.color='var(--green)';setTimeout(()=>{si.style.display='none';},3000);}
-      }
+      const { doc, setDoc } = _fns();
+      await setDoc(doc(_db(), 'users', uid), data, { merge: true });
+      const si = document.getElementById('sync-indicator');
+      if(si){ si.style.display='block'; si.textContent='☁ Sync OK'; si.style.color='var(--green)'; setTimeout(()=>{ si.style.display='none'; }, 3000); }
+      console.log('[LexPrep] User saved to Firebase');
     }catch(e){
-      console.warn('[LexPrep] JSONBin save error:',e.message);
+      console.warn('[LexPrep] Firebase save error:', e.message);
     }
   });
-  return _savePromise;
+  return _saveQueue;
+}
+
+// Save global config (admin only)
+async function dbSaveConfig(configData){
+  try{
+    const { doc, setDoc } = _fns();
+    await setDoc(doc(_db(), 'config', 'global'), configData, { merge: true });
+    DB.config = { ...DB.config, ...configData };
+    console.log('[LexPrep] Config saved to Firebase');
+  }catch(e){
+    console.warn('[LexPrep] Firebase config save error:', e.message);
+    throw e;
+  }
+}
+
+// Load all users for admin panel
+async function dbLoadAllUsers(){
+  try{
+    const { collection, getDocs } = _fns();
+    const snap = await getDocs(collection(_db(), 'users'));
+    DB.users = snap.docs.map(d => ({ ...d.data(), _uid: d.id }));
+    console.log('[LexPrep] All users loaded:', DB.users.length);
+  }catch(e){
+    console.warn('[LexPrep] Firebase all-users load error:', e.message);
+  }
+}
+
+// Legacy dbSave — now saves current user + config
+async function dbSave(){
+  if(STATE.firebaseUid && STATE.currentUser){
+    await saveUserProgress();
+  }
 }
 
 function saveUserProgress(){
-  if(!STATE.currentUser)return;
-  const u=DB.users.find(u=>u.id===STATE.currentUser.id);
-  if(!u)return;
-  u.xp=STATE.xp||0;
-  u.streak=STATE.streak||0;
-  u.totalQ=STATE.totalQuestions||0;
-  u.correctQ=STATE.correctAnswers||0;
-  u.progress=calcOverallProgress();
-  u.subjectProgress={...STATE.subjectProgress};
-  if(STATE.simResults&&STATE.simResults.length)u.simResults=STATE.simResults;
-  if(STATE.quizHistory&&STATE.quizHistory.length)u.quizHistory=STATE.quizHistory.slice(-50);
-  // Update STATE.currentUser reference too so UI is consistent
-  STATE.currentUser.xp=u.xp;
-  STATE.currentUser.streak=u.streak;
-  STATE.currentUser.totalQ=u.totalQ;
-  STATE.currentUser.correctQ=u.correctQ;
-  STATE.currentUser.progress=u.progress;
-  STATE.currentUser.subjectProgress=u.subjectProgress;
-  dbSave(); // saves to JSONBin — async, non-blocking
-  saveSession(); // saves to localStorage immediately
+  if(!STATE.currentUser || !STATE.firebaseUid) return;
+  const progress = calcOverallProgress();
+  const userData = {
+    id: STATE.currentUser.id,
+    name: STATE.currentUser.name,
+    email: STATE.currentUser.email,
+    uni: STATE.currentUser.uni || '',
+    joined: STATE.currentUser.joined,
+    plan: STATE.currentUser.plan || 'free',
+    status: STATE.currentUser.status || 'active',
+    xp: STATE.xp || 0,
+    streak: STATE.streak || 0,
+    totalQ: STATE.totalQuestions || 0,
+    correctQ: STATE.correctAnswers || 0,
+    progress,
+    subjectProgress: { ...STATE.subjectProgress },
+    simResults: STATE.simResults || [],
+    quizHistory: (STATE.quizHistory || []).slice(-50),
+    examDate: STATE.examDate ? STATE.examDate.toISOString().split('T')[0] : '',
+  };
+  // Update in-memory user record
+  STATE.currentUser.xp = userData.xp;
+  STATE.currentUser.streak = userData.streak;
+  STATE.currentUser.totalQ = userData.totalQ;
+  STATE.currentUser.correctQ = userData.correctQ;
+  STATE.currentUser.progress = userData.progress;
+  STATE.currentUser.subjectProgress = userData.subjectProgress;
+  dbSaveUser(STATE.firebaseUid, userData); // async, non-blocking
+  saveSession();
 }
 
 function calcOverallProgress(){
@@ -1261,25 +1276,38 @@ async function doLogin(){
   const btn=document.getElementById('btn-login');
   btn.textContent='Verificando…';btn.disabled=true;
   try{
-    await dbLoad(); // always load fresh before auth to prevent stale user list
-  }catch(e){console.warn('[LexPrep] pre-login dbLoad error',e);}
-  btn.textContent='Ingresar a LexPrep →';btn.disabled=false;
-  const user=DB.users.find(u=>u.email.toLowerCase()===email&&u.pass===pass);
-  if(!user){showError('login-error','Credenciales incorrectas. Verifica tu correo y contraseña.');return;}
-  if(user.status==='inactive'){showError('login-error','Cuenta desactivada. Contacta al administrador.');return;}
-  // Hydrate STATE from DB user record (never NaN)
-  STATE.currentUser=user;STATE.isAdmin=false;
-  STATE.xp=safeNum(user.xp,0);
-  STATE.streak=safeNum(user.streak,0);
-  STATE.totalQuestions=safeNum(user.totalQ,0);
-  STATE.correctAnswers=safeNum(user.correctQ,0);
-  STATE.subjectProgress=user.subjectProgress&&typeof user.subjectProgress==='object'?{...user.subjectProgress}:{};
-  STATE.simResults=Array.isArray(user.simResults)?user.simResults:[];
-  STATE.quizHistory=Array.isArray(user.quizHistory)?user.quizHistory:[];
-  STATE.geminiKey=DB.config.geminiKey||localStorage.getItem('lp_gkey')||'';
-  if(STATE.geminiKey)localStorage.setItem('lp_gkey',STATE.geminiKey);
-  if(user.examDate)STATE.examDate=new Date(user.examDate);
-  enterApp();
+    const { signInWithEmailAndPassword } = _fns();
+    const cred = await signInWithEmailAndPassword(_auth(), email, pass);
+    const uid = cred.user.uid;
+    STATE.firebaseUid = uid;
+    // Load user data from Firestore
+    const userData = await dbLoadUser(uid);
+    if(!userData){ showError('login-error','No se encontraron datos de usuario. Contacta al administrador.'); btn.textContent='Ingresar a LexPrep →';btn.disabled=false; return; }
+    if(userData.status==='inactive'){ showError('login-error','Cuenta desactivada. Contacta al administrador.'); btn.textContent='Ingresar a LexPrep →';btn.disabled=false; return; }
+    // Load global config (geminiKey, etc.)
+    await dbLoad();
+    // Hydrate STATE
+    STATE.currentUser = userData; STATE.isAdmin = false;
+    STATE.xp = safeNum(userData.xp,0);
+    STATE.streak = safeNum(userData.streak,0);
+    STATE.totalQuestions = safeNum(userData.totalQ,0);
+    STATE.correctAnswers = safeNum(userData.correctQ,0);
+    STATE.subjectProgress = userData.subjectProgress && typeof userData.subjectProgress==='object' ? {...userData.subjectProgress} : {};
+    STATE.simResults = Array.isArray(userData.simResults) ? userData.simResults : [];
+    STATE.quizHistory = Array.isArray(userData.quizHistory) ? userData.quizHistory : [];
+    STATE.geminiKey = DB.config.geminiKey || localStorage.getItem('lp_gkey') || '';
+    if(STATE.geminiKey) localStorage.setItem('lp_gkey', STATE.geminiKey);
+    if(userData.examDate) STATE.examDate = new Date(userData.examDate);
+    enterApp();
+  }catch(e){
+    const msg = e.code==='auth/invalid-credential'||e.code==='auth/wrong-password'||e.code==='auth/user-not-found'
+      ? 'Credenciales incorrectas. Verifica tu correo y contraseña.'
+      : e.code==='auth/too-many-requests' ? 'Demasiados intentos. Espera unos minutos.'
+      : 'Error al iniciar sesión: '+e.message;
+    showError('login-error', msg);
+  }finally{
+    btn.textContent='Ingresar a LexPrep →';btn.disabled=false;
+  }
 }
 
 async function doRegister(){
@@ -1292,42 +1320,43 @@ async function doRegister(){
   if(!name||!email||!pass){showError('register-error','Completa nombre, correo y contraseña.');return;}
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){showError('register-error','Ingresa un correo electrónico válido.');return;}
   if(pass.length<6){showError('register-error','La contraseña debe tener mínimo 6 caracteres.');return;}
-  // Basic XSS sanitisation
   const safeName=name.replace(/[<>]/g,'').slice(0,100);
-  const safeEmail=email.slice(0,200);
   const btn=document.getElementById('btn-register');
   btn.textContent='Creando cuenta…';btn.disabled=true;
-  try{await dbLoad();}catch(e){console.warn('[LexPrep] pre-register dbLoad error',e);}
-  if(DB.users.find(u=>u.email.toLowerCase()===safeEmail)){
+  try{
+    const { createUserWithEmailAndPassword } = _fns();
+    const cred = await createUserWithEmailAndPassword(_auth(), email, pass);
+    const uid = cred.user.uid;
+    STATE.firebaseUid = uid;
+    // Load global config first
+    await dbLoad();
+    const nu = {
+      id: Date.now(),
+      name: safeName,
+      email: email.slice(0,200),
+      uni: uni.slice(0,200)||'',
+      joined: new Date().toISOString().split('T')[0],
+      progress:0, status:'active', plan:'free',
+      xp:0, streak:0, totalQ:0, correctQ:0,
+      subjectProgress:{}, simResults:[], quizHistory:[],
+      examDate: date||''
+    };
+    await dbSaveUser(uid, nu);
+    STATE.currentUser=nu; STATE.isAdmin=false;
+    STATE.xp=0;STATE.streak=0;STATE.totalQuestions=0;STATE.correctAnswers=0;
+    STATE.subjectProgress={};STATE.simResults=[];STATE.quizHistory=[];
+    STATE.geminiKey=DB.config.geminiKey||localStorage.getItem('lp_gkey')||'';
+    if(STATE.geminiKey)localStorage.setItem('lp_gkey',STATE.geminiKey);
+    if(date)STATE.examDate=new Date(date);
+    enterApp();
+  }catch(e){
+    const msg = e.code==='auth/email-already-in-use' ? 'Correo ya registrado. Inicia sesión.'
+      : e.code==='auth/weak-password' ? 'La contraseña debe tener mínimo 6 caracteres.'
+      : 'Error al crear cuenta: '+e.message;
+    showError('register-error', msg);
+  }finally{
     btn.textContent='Crear mi cuenta →';btn.disabled=false;
-    showError('register-error','Correo ya registrado. Inicia sesión.');return;
   }
-  // Robust new user object — all metrics at 0, no undefined/NaN
-  const nu={
-    id:Date.now(),
-    name:safeName,
-    email:safeEmail,
-    pass,
-    uni:uni.slice(0,200)||'',
-    joined:new Date().toISOString().split('T')[0],
-    progress:0,status:'active',plan:'free',
-    xp:0,streak:0,totalQ:0,correctQ:0,
-    subjectProgress:{},
-    simResults:[],
-    quizHistory:[],
-    examDate:date||''
-  };
-  DB.users.push(nu);
-  try{await dbSave();}catch(e){console.warn('[LexPrep] post-register dbSave error',e);}
-  // Init STATE from new user — all zeroes, no random fake progress
-  STATE.currentUser=nu;STATE.isAdmin=false;
-  STATE.xp=0;STATE.streak=0;STATE.totalQuestions=0;STATE.correctAnswers=0;
-  STATE.subjectProgress={};STATE.simResults=[];STATE.quizHistory=[];
-  STATE.geminiKey=DB.config.geminiKey||localStorage.getItem('lp_gkey')||'';
-  if(STATE.geminiKey)localStorage.setItem('lp_gkey',STATE.geminiKey);
-  if(date)STATE.examDate=new Date(date);
-  btn.textContent='Crear mi cuenta →';btn.disabled=false;
-  enterApp();
 }
 
 async function doAdminLogin(){
@@ -1336,25 +1365,38 @@ async function doAdminLogin(){
   hideError('admin-login-error');
   const btn=document.getElementById('btn-admin-login');
   btn.textContent='Verificando…';btn.disabled=true;
-  await dbLoad();
-  btn.textContent='Acceder al panel →';btn.disabled=false;
-  if(email==='admin@lexprep.co'&&(pass===(DB.config.adminPass||'lp_admin_2025'))){
-    STATE.isAdmin=true;enterAdminPanel();
-  }else{showError('admin-login-error','Credenciales de administrador incorrectas.');}
+  try{
+    await dbLoad();
+    const adminPass = DB.config.adminPass || 'admin2025';
+    if(email==='admin@lexprep.co' && pass===adminPass){
+      STATE.isAdmin=true;
+      // Load all users for admin panel
+      await dbLoadAllUsers();
+      enterAdminPanel();
+    }else{
+      showError('admin-login-error','Credenciales de administrador incorrectas.');
+    }
+  }catch(e){
+    showError('admin-login-error','Error al verificar: '+e.message);
+  }finally{
+    btn.textContent='Acceder al panel →';btn.disabled=false;
+  }
 }
 
 function doLogout(){
   saveUserProgress();clearSession();
   clearTimeout(inactivityTimer);clearTimeout(inactivityWarnTimer);
   if(simTimer)clearInterval(simTimer);
+  // Firebase sign out (non-blocking)
+  try{ const { signOut } = _fns(); if(_auth()) signOut(_auth()); }catch(e){}
   STATE.currentUser=null;STATE.isAdmin=false;STATE.chatHistory=[];
+  STATE.firebaseUid=null;
   STATE.xp=0;STATE.streak=0;STATE.totalQuestions=0;STATE.correctAnswers=0;
   STATE.simResults=[];STATE.subjectProgress={};STATE.quizHistory=[];
   STATE.quizState={caseSet:null,currentQ:0,answered:false,selected:null};
   document.getElementById('auth-section').classList.remove('hidden');
   document.getElementById('app-section').classList.add('hidden');
   document.getElementById('admin-section').classList.add('hidden');
-  // Reset password fields and their toggle state
   const lp=document.getElementById('login-pass');if(lp){lp.value='';lp.type='password';}
   const rp=document.getElementById('reg-pass');if(rp){rp.value='';rp.type='password';}
   document.getElementById('login-email').value='';
@@ -2510,12 +2552,10 @@ async function saveSettings(){
   if(name&&STATE.currentUser)STATE.currentUser.name=name;
   if(uni&&STATE.currentUser)STATE.currentUser.uni=uni;
   if(date)STATE.examDate=new Date(date);
-  const u=DB.users.find(u=>u.id===STATE.currentUser?.id);
-  if(u){if(name)u.name=name;if(uni)u.uni=uni;if(date)u.examDate=date;}
   const btn=document.getElementById('btn-save-settings');
   if(btn){btn.textContent='Guardando…';btn.disabled=true;}
   saveUserProgress();
-  await new Promise(r=>setTimeout(r,800)); // let dbSave fire
+  await new Promise(r=>setTimeout(r,600));
   if(btn){btn.textContent='✓ Guardado en la nube';btn.disabled=false;}
   document.getElementById('user-name-sidebar').textContent=(name||STATE.currentUser?.name||'').split(' ').slice(0,2).join(' ');
   setTimeout(()=>{if(btn)btn.textContent='Guardar cambios';},3000);
@@ -2527,10 +2567,23 @@ async function changePassword(){
   if(!oldP||!newP||!confP){alert('Completa todos los campos.');return;}
   if(newP.length<6){alert('La nueva contraseña debe tener mínimo 6 caracteres.');return;}
   if(newP!==confP){alert('Las contraseñas nuevas no coinciden.');return;}
-  const u=DB.users.find(u=>u.id===STATE.currentUser?.id);
-  if(!u||u.pass!==oldP){alert('La contraseña actual es incorrecta.');return;}
-  u.pass=newP;STATE.currentUser.pass=newP;await dbSave();alert('Contraseña cambiada exitosamente.');
-  document.getElementById('set-pass-old').value='';document.getElementById('set-pass-new').value='';document.getElementById('set-pass-confirm').value='';
+  try{
+    const { EmailAuthProvider, reauthenticateWithCredential, updatePassword } = _fns();
+    const fbUser = _auth().currentUser;
+    if(!fbUser){alert('Sesión expirada. Inicia sesión de nuevo.');return;}
+    const cred = EmailAuthProvider.credential(fbUser.email, oldP);
+    await reauthenticateWithCredential(fbUser, cred);
+    await updatePassword(fbUser, newP);
+    alert('Contraseña cambiada exitosamente.');
+    document.getElementById('set-pass-old').value='';
+    document.getElementById('set-pass-new').value='';
+    document.getElementById('set-pass-confirm').value='';
+  }catch(e){
+    const msg=e.code==='auth/wrong-password'||e.code==='auth/invalid-credential'
+      ? 'La contraseña actual es incorrecta.'
+      : 'Error al cambiar contraseña: '+e.message;
+    alert(msg);
+  }
 }
 function resetProgress(){
   STATE.xp=0;STATE.streak=0;STATE.totalQuestions=0;STATE.correctAnswers=0;
@@ -2578,9 +2631,9 @@ function renderAdminUsers(el){
             <td><span class="badge ${u.status==='active'?'badge-green':'badge-red'}">${u.status==='active'?'Activo':'Inactivo'}</span></td>
             <td class="text-secondary text-xs">${u.joined||'—'}</td>
             <td><div style="display:flex;gap:5px">
-              <button data-toggle="${u.id}" style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;color:var(--text-secondary)">${u.status==='active'?'Desactivar':'Activar'}</button>
-              <button data-del="${u.id}" style="background:var(--red-dim);border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;color:var(--red)">Eliminar</button>
-              <button data-resetpass="${u.id}" style="background:var(--blue-dim);border:1px solid rgba(59,130,246,.3);border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;color:var(--blue-jur)">Reset pass</button>
+              <button data-toggle="${u._uid||u.id}" style="background:var(--bg-elevated);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;color:var(--text-secondary)">${u.status==='active'?'Desactivar':'Activar'}</button>
+              <button data-del="${u._uid||u.id}" style="background:var(--red-dim);border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;color:var(--red)">Eliminar</button>
+              <button data-resetpass="${u._uid||u.id}" style="background:var(--blue-dim);border:1px solid rgba(59,130,246,.3);border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;color:var(--blue-jur)">Reset pass</button>
             </div></td>
           </tr>`).join('')}
         </tbody>
@@ -2609,9 +2662,32 @@ function renderAdminUsers(el){
   el.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>deleteUser(parseInt(b.dataset.del))));
   el.querySelectorAll('[data-resetpass]').forEach(b=>b.addEventListener('click',()=>resetUserPass(parseInt(b.dataset.resetpass))));
 }
-async function toggleUserStatus(id){const u=DB.users.find(u=>u.id===id);if(u){u.status=u.status==='active'?'inactive':'active';await dbSave();renderAdminUsers(document.getElementById('admin-page-users'));}}
-async function deleteUser(id){if(!confirm('¿Eliminar este usuario?'))return;const i=DB.users.findIndex(u=>u.id===id);if(i>-1){DB.users.splice(i,1);await dbSave();renderAdminUsers(document.getElementById('admin-page-users'));}}
-async function resetUserPass(id){const np=prompt('Nueva contraseña (mínimo 6 caracteres):');if(!np)return;if(np.length<6){alert('Mínimo 6 caracteres.');return;}const u=DB.users.find(u=>u.id===id);if(u){u.pass=np;await dbSave();alert('Contraseña de '+u.name+' actualizada.');}}
+async function toggleUserStatus(uid){
+  const u=DB.users.find(u=>u._uid===uid||u.id===uid);
+  if(!u)return;
+  u.status=u.status==='active'?'inactive':'active';
+  const realUid=u._uid||uid;
+  try{ await dbSaveUser(realUid,{status:u.status}); }catch(e){}
+  renderAdminUsers(document.getElementById('admin-page-users'));
+}
+async function deleteUser(uid){
+  if(!confirm('¿Eliminar este usuario? Sus datos se borrarán permanentemente.'))return;
+  const i=DB.users.findIndex(u=>u._uid===uid||u.id===uid);
+  if(i>-1){
+    const realUid=DB.users[i]._uid||uid;
+    try{
+      const { doc, deleteDoc } = _fns();
+      await deleteDoc(doc(_db(),'users',realUid));
+      DB.users.splice(i,1);
+    }catch(e){ alert('Error al eliminar: '+e.message); return; }
+    renderAdminUsers(document.getElementById('admin-page-users'));
+  }
+}
+async function resetUserPass(uid){
+  const np=prompt('Nueva contraseña (mínimo 6 caracteres):');
+  if(!np)return;if(np.length<6){alert('Mínimo 6 caracteres.');return;}
+  alert('Para cambiar contraseñas en Firebase, el usuario debe usar la opción "Olvidé mi contraseña" en el login, o puede cambiarla desde Configuración en su cuenta.');
+}
 async function createUser(){
   const name=document.getElementById('nu-name').value.trim();
   const email=document.getElementById('nu-email').value.trim().toLowerCase();
@@ -2619,9 +2695,21 @@ async function createUser(){
   const pass=document.getElementById('nu-pass').value;
   const plan=document.getElementById('nu-plan').value;
   if(!name||!email||!pass){alert('Completa nombre, email y contraseña.');return;}
-  if(DB.users.find(u=>u.email.toLowerCase()===email)){alert('Este correo ya existe.');return;}
-  DB.users.push({id:Date.now(),name,email,pass,uni,joined:new Date().toISOString().split('T')[0],progress:0,status:'active',plan,xp:0,streak:0,totalQ:0,correctQ:0});
-  await dbSave();document.getElementById('create-user-modal')?.classList.add('hidden');renderAdminUsers(document.getElementById('admin-page-users'));
+  if(pass.length<6){alert('La contraseña debe tener mínimo 6 caracteres.');return;}
+  try{
+    const { createUserWithEmailAndPassword } = _fns();
+    const cred = await createUserWithEmailAndPassword(_auth(), email, pass);
+    const uid = cred.user.uid;
+    const nu = {id:Date.now(),name,email,uni,joined:new Date().toISOString().split('T')[0],progress:0,status:'active',plan,xp:0,streak:0,totalQ:0,correctQ:0,subjectProgress:{},simResults:[],quizHistory:[]};
+    await dbSaveUser(uid, nu);
+    DB.users.push({...nu, _uid:uid});
+    document.getElementById('create-user-modal')?.classList.add('hidden');
+    renderAdminUsers(document.getElementById('admin-page-users'));
+    alert('Usuario creado exitosamente.');
+  }catch(e){
+    const msg=e.code==='auth/email-already-in-use'?'Este correo ya está registrado.':'Error: '+e.message;
+    alert(msg);
+  }
 }
 function renderAdminMetrics(el){
   const total=DB.users.length,active=DB.users.filter(u=>u.status==='active').length;
@@ -2713,11 +2801,10 @@ async function saveAdminGeminiKey(){
   const key=document.getElementById('admin-gemini-key')?.value?.trim();
   if(!key){alert('Ingresa una API key válida.');return;}
   DB.config.geminiKey=key;STATE.geminiKey=key;
-  // Also persist to dedicated localStorage so all devices get it after first JSONBin sync
   localStorage.setItem('lp_gkey',key);
   try{
-    await dbSave();
-    alert('API key de Google AI guardada globalmente ✓\n\nTodos los estudiantes podrán usar la IA desde cualquier dispositivo.');
+    await dbSaveConfig({ geminiKey: key });
+    alert('API key de Google AI guardada globalmente ✓\n\nTodos los estudiantes la recibirán automáticamente desde cualquier dispositivo.');
   }catch(e){
     alert('Error al guardar: '+e.message);
   }
@@ -2759,22 +2846,14 @@ async function testAdminKey(){
 async function saveAdminPass(){
   const np=document.getElementById('admin-new-pass')?.value?.trim();
   if(!np||np.length<6){alert('La contraseña debe tener mínimo 6 caracteres.');return;}
-  DB.config.adminPass=np;await dbSave();alert('Contraseña de admin actualizada.');
+  try{
+    await dbSaveConfig({ adminPass: np });
+    DB.config.adminPass=np;
+    alert('Contraseña de admin actualizada.');
+  }catch(e){alert('Error al guardar: '+e.message);}
 }
 async function saveAdminJsonbin(){
-  const binId=document.getElementById('admin-binid')?.value?.trim();
-  const apiKey=document.getElementById('admin-apikey')?.value?.trim();
-  if(!binId||!apiKey){alert('Completa ambos campos.');return;}
-  JSONBIN.BIN_ID=binId;JSONBIN.API_KEY=apiKey;
-  localStorage.setItem('lp_bin',binId);localStorage.setItem('lp_key',apiKey);
-  // Store in DB.config so any device loading the bin gets the credentials
-  DB.config.binId=binId;DB.config.binApiKey=apiKey;
-  try{
-    await dbSave();
-    alert('JSONBin configurado ✓\n\nLos datos persisten en la nube y son accesibles desde cualquier dispositivo (móvil, tablet, PC).\n\nLos estudiantes que inicien sesión en otro dispositivo cargarán la API key de IA automáticamente.');
-  }catch(e){
-    alert('Error al guardar en JSONBin: '+e.message);
-  }
+  alert('Esta plataforma ahora usa Firebase para la persistencia de datos.\n\nNo es necesario configurar JSONBin. Los datos se sincronizan automáticamente.');
 }
 function renderAdminContent(el){
   const extraSubjects=DB.config.extraSubjects||[];
@@ -2824,7 +2903,10 @@ async function addNewSubject(){
   if(DB.config.extraSubjects.find(s=>s.name.toLowerCase()===name.toLowerCase())){alert('Ya existe una materia con ese nombre.');return;}
   DB.config.extraSubjects.push({name,desc:desc||''});
   SUBJECTS.push({id:'custom_'+Date.now(),name,color:'var(--gold)',desc:desc||''});
-  await dbSave();alert(`Materia "${name}" agregada. La IA ya puede generar preguntas sobre este tema.`);
+  try{
+    await dbSaveConfig({ extraSubjects: DB.config.extraSubjects });
+    alert(`Materia "${name}" agregada. La IA ya puede generar preguntas sobre este tema.`);
+  }catch(e){ alert('Error al guardar: '+e.message); }
   renderAdminContent(document.getElementById('admin-page-content'));
 }
 async function removeCustomSubject(idx){
@@ -2832,7 +2914,8 @@ async function removeCustomSubject(idx){
   const name=DB.config.extraSubjects[idx]?.name;
   DB.config.extraSubjects.splice(idx,1);
   const si=SUBJECTS.findIndex(s=>s.name===name);if(si>-1)SUBJECTS.splice(si,1);
-  await dbSave();renderAdminContent(document.getElementById('admin-page-content'));
+  try{ await dbSaveConfig({ extraSubjects: DB.config.extraSubjects }); }catch(e){}
+  renderAdminContent(document.getElementById('admin-page-content'));
 }
 
 
@@ -3304,77 +3387,82 @@ function _togglePass(inputId,iconId){
 }
 
 // ============================================================
-// INIT — flash prevention + session restore
+// INIT — Firebase Auth state + session restore
 // ============================================================
 (async()=>{
-  // Hide everything until ready
   document.body.classList.remove('app-ready');
   attachListeners();
-  // Load JSONBin credentials from localStorage first (bootstrap for new devices)
-  const savedBin=localStorage.getItem('lp_bin');
-  const savedKey=localStorage.getItem('lp_key');
-  if(savedBin&&savedBin!=='TU_BIN_ID_AQUI')JSONBIN.BIN_ID=savedBin;
-  if(savedKey&&savedKey!=='TU_API_KEY_AQUI')JSONBIN.API_KEY=savedKey;
-  // Pre-restore credentials BEFORE dbLoad (mobile first-open fix)
-  try{
-    // 1. Dedicated geminiKey store (fastest, most reliable)
-    const savedGkey=localStorage.getItem('lp_gkey');
-    if(savedGkey){STATE.geminiKey=savedGkey;DB.config.geminiKey=savedGkey;}
-    // 2. Session-embedded credentials
-    const preSession=JSON.parse(localStorage.getItem(SESSION_KEY)||'{}');
-    if(preSession.binId&&preSession.binId!=='TU_BIN_ID_AQUI'){JSONBIN.BIN_ID=preSession.binId;localStorage.setItem('lp_bin',preSession.binId);}
-    if(preSession.binApiKey&&preSession.binApiKey!=='TU_API_KEY_AQUI'){JSONBIN.API_KEY=preSession.binApiKey;localStorage.setItem('lp_key',preSession.binApiKey);}
-    if(preSession.geminiKey&&!STATE.geminiKey){STATE.geminiKey=preSession.geminiKey;DB.config.geminiKey=preSession.geminiKey;}
-  }catch(e){}
-  // Always load remote DB BEFORE rendering anything (fixes cross-device config)
-  await dbLoad();
-  // Always sync geminiKey from DB into STATE after load (DB is authoritative)
-  if(DB.config.geminiKey)STATE.geminiKey=DB.config.geminiKey;
-  // If DB has valid credentials, persist them to localStorage for future loads
-  if(DB.config.binId&&DB.config.binId!=='TU_BIN_ID_AQUI'){
-    localStorage.setItem('lp_bin',DB.config.binId);
-    JSONBIN.BIN_ID=DB.config.binId;
-  }
-  if(DB.config.binApiKey&&DB.config.binApiKey!=='TU_API_KEY_AQUI'){
-    localStorage.setItem('lp_key',DB.config.binApiKey);
-    JSONBIN.API_KEY=DB.config.binApiKey;
-  }
-  // Try to restore session
-  const session=loadSession();
+
+  // Pre-load Gemini key from localStorage (instant, no network)
+  const cachedKey=localStorage.getItem('lp_gkey');
+  if(cachedKey){STATE.geminiKey=cachedKey;DB.config.geminiKey=cachedKey;}
+
   const _show=()=>{
     document.body.classList.add('app-ready');
     document.getElementById('init-loader')?.classList.add('gone');
   };
-  if(session){
-    if(session.isAdmin){
-      STATE.isAdmin=true;_show();enterAdminPanel();return;
-    }
-    const user=DB.users.find(u=>u.id===session.userId);
-    if(user&&user.status==='active'){
-      STATE.currentUser=user;STATE.isAdmin=false;
-      // Prefer DB values (most up-to-date), fall back to session, then 0
-      STATE.xp=safeNum(user.xp??session.xp,0);
-      STATE.streak=safeNum(user.streak??session.streak,0);
-      STATE.totalQuestions=safeNum(user.totalQ??session.totalQuestions,0);
-      STATE.correctAnswers=safeNum(user.correctQ??session.correctAnswers,0);
-      // subjectProgress: DB is authoritative (already synced on login)
-      STATE.subjectProgress={...(user.subjectProgress||{})};
-      // Prefer session simResults if more recent (user just did a sim)
-      const dbSims=Array.isArray(user.simResults)?user.simResults:[];
-      const sessSims=Array.isArray(session.simResults)?session.simResults:[];
-      STATE.simResults=sessSims.length>=dbSims.length?sessSims:dbSims;
-      STATE.quizHistory=Array.isArray(session.quizHistory)?session.quizHistory:[];
-      // geminiKey: DB config authoritative; lp_gkey localStorage; session as last fallback
-      STATE.geminiKey=DB.config.geminiKey||localStorage.getItem('lp_gkey')||session.geminiKey||'';
-      if(STATE.geminiKey){localStorage.setItem('lp_gkey',STATE.geminiKey);DB.config.geminiKey=STATE.geminiKey;}
-      if(session.examDate)STATE.examDate=new Date(session.examDate);
-      else if(user.examDate)STATE.examDate=new Date(user.examDate);
-      _show();enterApp();return;
-    }
-    clearSession();
+
+  // Wait for Firebase to initialize (SDK loads as module, may take a moment)
+  let fbWait=0;
+  while(!window._fbAuth && fbWait<30){ await new Promise(r=>setTimeout(r,100)); fbWait++; }
+
+  if(!window._fbAuth){
+    // Firebase not ready — show login with error
+    _show();showScreen('login');
+    console.warn('[LexPrep] Firebase auth not available');
+    return;
   }
-  // No session → show login
-  _show();showScreen('login');
+
+  const { onAuthStateChanged } = _fns();
+
+  // Check if Firebase has a persisted auth session (works on any device)
+  await new Promise(resolve=>{
+    const unsub = onAuthStateChanged(_auth(), async(fbUser)=>{
+      unsub(); // Only run once
+      if(fbUser){
+        // User has a persisted Firebase session — restore it
+        STATE.firebaseUid = fbUser.uid;
+        try{
+          await dbLoad(); // Load global config (geminiKey, etc.)
+          const userData = await dbLoadUser(fbUser.uid);
+          if(userData && userData.status==='active'){
+            // Check if admin session
+            const session=loadSession();
+            if(session&&session.isAdmin){
+              STATE.isAdmin=true;_show();enterAdminPanel();resolve();return;
+            }
+            STATE.currentUser=userData; STATE.isAdmin=false;
+            STATE.xp=safeNum(userData.xp,0);
+            STATE.streak=safeNum(userData.streak,0);
+            STATE.totalQuestions=safeNum(userData.totalQ,0);
+            STATE.correctAnswers=safeNum(userData.correctQ,0);
+            STATE.subjectProgress=userData.subjectProgress&&typeof userData.subjectProgress==='object'?{...userData.subjectProgress}:{};
+            const session2=loadSession();
+            const dbSims=Array.isArray(userData.simResults)?userData.simResults:[];
+            const sessSims=session2&&Array.isArray(session2.simResults)?session2.simResults:[];
+            STATE.simResults=sessSims.length>=dbSims.length?sessSims:dbSims;
+            STATE.quizHistory=Array.isArray(userData.quizHistory)?userData.quizHistory:[];
+            STATE.geminiKey=DB.config.geminiKey||localStorage.getItem('lp_gkey')||'';
+            if(STATE.geminiKey){localStorage.setItem('lp_gkey',STATE.geminiKey);DB.config.geminiKey=STATE.geminiKey;}
+            if(userData.examDate)STATE.examDate=new Date(userData.examDate);
+            _show();enterApp();
+          }else{
+            // User data not found or inactive
+            await _fns().signOut(_auth());
+            clearSession();
+            _show();showScreen('login');
+          }
+        }catch(e){
+          console.warn('[LexPrep] Auth restore error:',e.message);
+          _show();showScreen('login');
+        }
+      }else{
+        // No Firebase session
+        _show();showScreen('login');
+      }
+      resolve();
+    });
+  });
 })();
 </script>
 </body>
