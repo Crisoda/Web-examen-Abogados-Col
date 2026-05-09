@@ -1279,15 +1279,36 @@ async function geminiCall(prompt, genConfig={}) {
 
       // Cualquier otro error HTTP
       if (!resp.ok) {
-        const e = await resp.json().catch(() => ({}));
-        ultimoError = e?.error?.message || `HTTP ${resp.status}`;
+        // Leer como texto primero (algunos errores de Google no son JSON)
+        const rawText = await resp.text().catch(() => '');
+        let errMsg = '';
+        try { errMsg = JSON.parse(rawText)?.error?.message || rawText; } catch { errMsg = rawText; }
+
+        // "Host not in allowlist" → la key tiene restricciones de dominio/IP
+        if (rawText.includes('allowlist') || rawText.includes('not allowed') || rawText.includes('HTTP referrer')) {
+          throw new Error(
+            'La API key tiene restricciones de dominio activas en Google Cloud Console. ' +
+            'Debes eliminar las restricciones: ve a console.cloud.google.com → Credenciales → ' +
+            'edita tu API key → en "Restricciones de aplicación" selecciona "Ninguna" → Guardar.'
+          );
+        }
+        // "not found for API version" → modelo no disponible en este endpoint
+        if (rawText.includes('not found for API version') || resp.status === 404) {
+          ultimoError = errMsg || `Modelo ${model} no disponible`;
+          todosEnCuota = false;
+          console.log(`[Gemini] ${model} no disponible → siguiente`);
+          continue;
+        }
+        ultimoError = errMsg || `HTTP ${resp.status}`;
         todosEnCuota = false;
         console.warn(`[Gemini] ${model} error HTTP ${resp.status}:`, ultimoError);
         continue;
       }
 
       // Éxito — mismo parseo que servidor.py
-      const data = await resp.json();
+      const respText = await resp.text();
+      let data;
+      try { data = JSON.parse(respText); } catch { data = {}; }
       const text = (data?.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/```json|```/g, '').trim();
       if (!text) {
         const blockReason = data?.promptFeedback?.blockReason || 'desconocido';
@@ -1297,11 +1318,13 @@ async function geminiCall(prompt, genConfig={}) {
       return text;
 
     } catch (err) {
-      // Re-lanzar errores fatales (key inválida, bloqueo de contenido)
+      // Re-lanzar errores fatales (key inválida, bloqueo de contenido, restricciones)
       if (
         err.message.includes('inválida') ||
         err.message.includes('sin permisos') ||
-        err.message.includes('no generó respuesta')
+        err.message.includes('no generó respuesta') ||
+        err.message.includes('allowlist') ||
+        err.message.includes('restricciones de dominio')
       ) {
         throw err;
       }
@@ -1321,10 +1344,15 @@ async function geminiCall(prompt, genConfig={}) {
       'Si el problema persiste, verifica tu API key en aistudio.google.com/apikey'
     );
   }
+
+  // Detectar si el último error sugiere restricciones de dominio
+  const hintRestriccion = ultimoError.includes('not found') || ultimoError.includes('allowlist')
+    ? ' POSIBLE CAUSA: La API key tiene restricciones de dominio. Ve a console.cloud.google.com → Credenciales → edita tu key → "Restricciones de aplicación: Ninguna".'
+    : '';
   throw new Error(
     'No se pudo conectar con ningún modelo de Google AI. ' +
     'Verifica tu conexión a internet y que la API key sea válida. ' +
-    `Detalle: ${ultimoError}`
+    `Detalle: ${ultimoError}.${hintRestriccion}`
   );
 }
 
